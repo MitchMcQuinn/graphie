@@ -1,3 +1,19 @@
+"""
+utils/generate.py
+----------------
+This module handles OpenAI API integration for text generation.
+
+Purpose:
+    Provides utilities to initialize an OpenAI client and generate content
+    using OpenAI's API services.
+
+Functionality:
+    - Loads environment variables from .env.local
+    - Configures the OpenAI client with appropriate settings
+    - Handles generation requests through the OpenAI API
+    - Includes error handling and logging
+"""
+
 import os
 import logging
 from dotenv import load_dotenv
@@ -11,8 +27,6 @@ load_dotenv('.env.local')
 # Store the API key
 api_key = os.getenv('OPENAI_API_KEY')
 
-# Define a function that will lazily initialize the client when needed
-# This avoids initialization errors at import time
 def get_openai_client():
     try:
         import httpx
@@ -50,8 +64,8 @@ def generate(session, input_data):
     
     system_prompt = input_data.get('system', 'You are a helpful assistant.')
     user_message = input_data.get('user', '')
-    temperature = float(input_data.get('temperature', 0.7))
-    model = input_data.get('model', 'gpt-4')
+    temperature = float(input_data.get('temperature', 0.5))
+    model = input_data.get('model', 'gpt-4-turbo')
     
     logger.info(f"User message: '{user_message}', Model: {model}, Temperature: {temperature}")
     

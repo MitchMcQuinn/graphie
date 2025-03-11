@@ -1,9 +1,12 @@
 def request(session, input_data):
     """
-    This function is a placeholder for the human-in-the-loop request function.
-    In the actual implementation, this would pause the workflow until 
-    a user response is received. Since Flask handles requests synchronously,
-    this function will be called in response to a user action.
+    Human-in-the-loop request function that pauses the workflow until a user response is received.
+    This function sets up the session to await user input, storing the question or statement
+    to be displayed to the user in the front-end.
+    
+    Since Flask handles requests synchronously, this function doesn't actually block execution.
+    Instead, it marks the session as awaiting input, which is checked by the workflow engine
+    and API endpoints to pause processing until user input is received.
     
     Args:
         session: The current session object to store results
@@ -12,7 +15,7 @@ def request(session, input_data):
             - query: Alternative name for statement
     
     Returns:
-        A flag indicating a request has been initiated
+        A dict with status 'waiting_for_input' indicating a request has been initiated
     """
     # Extract the statement to show to the user
     # Support both 'statement' and 'query' parameter names
