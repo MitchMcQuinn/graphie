@@ -286,6 +286,68 @@
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
             
+            // Process any pending steps after receiving a response
+            function processPendingSteps() {
+                showTypingIndicator();
+                
+                // Make sure input stays disabled during processing
+                chatInput.disabled = true;
+                sendButton.disabled = true;
+                
+                fetch('/continue_processing', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    hideTypingIndicator();
+                    
+                    if (data.error) {
+                        addMessage(data.reply, false, true);
+                        // Re-enable input on error
+                        chatInput.disabled = false;
+                        sendButton.disabled = false;
+                        chatInput.focus();
+                    } else if (data.awaiting_input) {
+                        addMessage(data.statement);
+                        // Re-enable input when waiting for user
+                        chatInput.disabled = false;
+                        sendButton.disabled = false;
+                        chatInput.focus();
+                    } else if (data.reply) {
+                        addMessage(data.reply);
+                        
+                        // Check if we need to continue processing more steps
+                        if (data.has_pending_steps) {
+                            // Set a small delay before continuing to allow the UI to update
+                            setTimeout(processPendingSteps, 500);
+                        } else {
+                            // Re-enable input when all processing is complete
+                            chatInput.disabled = false;
+                            sendButton.disabled = false;
+                            chatInput.focus();
+                        }
+                    } else {
+                        // Re-enable input if no recognizable response
+                        chatInput.disabled = false;
+                        sendButton.disabled = false;
+                        chatInput.focus();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error processing pending steps:', error);
+                    hideTypingIndicator();
+                    addMessage('There was an error processing the workflow. Please try again.', false, true);
+                    
+                    // Re-enable input
+                    chatInput.disabled = false;
+                    sendButton.disabled = false;
+                    chatInput.focus();
+                });
+            }
+            
             // Start the chat
             function startChat() {
                 // Clear existing messages
@@ -312,6 +374,13 @@
                         addMessage(data.statement);
                     } else if (data.reply) {
                         addMessage(data.reply);
+                        
+                        // Check if we need to continue processing more steps
+                        if (data.has_pending_steps) {
+                            // Set a small delay before continuing to allow the UI to update
+                            setTimeout(processPendingSteps, 300);
+                            return; // Skip enabling input until all processing is complete
+                        }
                     } else {
                         addMessage('Hello! How can I help you today?');
                     }
@@ -368,6 +437,13 @@
                         addMessage(data.statement);
                     } else if (data.reply) {
                         addMessage(data.reply);
+                        
+                        // Check if we need to continue processing more steps
+                        if (data.has_pending_steps) {
+                            // Set a small delay before continuing to allow the UI to update
+                            setTimeout(processPendingSteps, 300);
+                            return; // Skip enabling input until all processing is complete
+                        }
                     }
                     
                     // Re-enable input
