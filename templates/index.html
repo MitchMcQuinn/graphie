@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphie - Neo4j Enabled Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='globals.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f9f9f9;
+            color: #333;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background-color: #4b88a2;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 20px;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .message {
+            max-width: 70%;
+            padding: 12px 15px;
+            border-radius: 20px;
+            margin-bottom: 5px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            position: relative;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .user-message {
+            background-color: #dcf8c6;
+            align-self: flex-end;
+            border-bottom-right-radius: 5px;
+        }
+        
+        .bot-message {
+            background-color: #f1f0f0;
+            align-self: flex-start;
+            border-bottom-left-radius: 5px;
+        }
+        
+        .error-message {
+            background-color: #ffebee;
+            color: #c62828;
+            border-left: 3px solid #c62828;
+        }
+        
+        .message-time {
+            font-size: 11px;
+            color: #999;
+            margin-top: 5px;
+            text-align: right;
+        }
+        
+        .chat-input-container {
+            padding: 15px;
+            background-color: #f0f0f0;
+            border-top: 1px solid #ddd;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .chat-input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 24px;
+            outline: none;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        .chat-input:focus {
+            border-color: #4b88a2;
+            box-shadow: 0 0 0 2px rgba(75, 136, 162, 0.2);
+        }
+        
+        .send-button {
+            background-color: #4b88a2;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 46px;
+            height: 46px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .send-button:hover {
+            background-color: #3a6d82;
+        }
+        
+        .send-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .typing-indicator {
+            display: flex;
+            padding: 10px;
+            align-self: flex-start;
+            margin-top: 10px;
+        }
+        
+        .typing-indicator span {
+            height: 8px;
+            width: 8px;
+            float: left;
+            margin: 0 1px;
+            background-color: #9E9EA1;
+            display: block;
+            border-radius: 50%;
+            opacity: 0.4;
+        }
+        
+        .typing-indicator span:nth-of-type(1) {
+            animation: typing 1s infinite;
+        }
+        
+        .typing-indicator span:nth-of-type(2) {
+            animation: typing 1s 0.33s infinite;
+        }
+        
+        .typing-indicator span:nth-of-type(3) {
+            animation: typing 1s 0.66s infinite;
+        }
+        
+        @keyframes typing {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+        
+        .retry-button {
+            background-color: #4b88a2;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            margin-top: 10px;
+            align-self: center;
+        }
+        
+        .retry-button:hover {
+            background-color: #3a6d82;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="chat-container">
+            <div class="header">
+                <h1>Graphie - Neo4j Enabled Chatbot</h1>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                <!-- Messages will be added here dynamically -->
+            </div>
+            <div class="typing-indicator" id="typing-indicator" style="display: none;">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <div class="chat-input-container">
+                <input 
+                    type="text" 
+                    class="chat-input" 
+                    id="chat-input" 
+                    placeholder="Type your message here..." 
+                    autofocus
+                >
+                <button class="send-button" id="send-button">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatMessages = document.getElementById('chat-messages');
+            const chatInput = document.getElementById('chat-input');
+            const sendButton = document.getElementById('send-button');
+            const typingIndicator = document.getElementById('typing-indicator');
+            
+            let chatStarted = false;
+            
+            // Show typing indicator
+            function showTypingIndicator() {
+                typingIndicator.style.display = 'flex';
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            
+            // Hide typing indicator
+            function hideTypingIndicator() {
+                typingIndicator.style.display = 'none';
+            }
+            
+            // Add a message to the chat
+            function addMessage(content, isUser = false, isError = false) {
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('message');
+                messageDiv.classList.add(isUser ? 'user-message' : 'bot-message');
+                
+                if (isError) {
+                    messageDiv.classList.add('error-message');
+                }
+                
+                messageDiv.textContent = content;
+                
+                const timeDiv = document.createElement('div');
+                timeDiv.classList.add('message-time');
+                const now = new Date();
+                timeDiv.textContent = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+                
+                messageDiv.appendChild(timeDiv);
+                
+                // If it's an error, add a retry button
+                if (isError) {
+                    const retryButton = document.createElement('button');
+                    retryButton.classList.add('retry-button');
+                    retryButton.textContent = 'Retry';
+                    retryButton.addEventListener('click', function() {
+                        startChat();
+                    });
+                    messageDiv.appendChild(retryButton);
+                }
+                
+                chatMessages.appendChild(messageDiv);
+                
+                // Scroll to bottom
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            
+            // Start the chat
+            function startChat() {
+                // Clear existing messages
+                while (chatMessages.firstChild) {
+                    chatMessages.removeChild(chatMessages.firstChild);
+                }
+                
+                chatStarted = false;
+                showTypingIndicator();
+                
+                fetch('/start_chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    hideTypingIndicator();
+                    
+                    if (data.error) {
+                        addMessage(data.reply, false, true);
+                    } else if (data.awaiting_input) {
+                        addMessage(data.statement);
+                    } else if (data.reply) {
+                        addMessage(data.reply);
+                    } else {
+                        addMessage('Hello! How can I help you today?');
+                    }
+                    
+                    chatStarted = true;
+                    chatInput.focus();
+                })
+                .catch(error => {
+                    console.error('Error starting chat:', error);
+                    hideTypingIndicator();
+                    addMessage('There was an error starting the chat. Please try again.', false, true);
+                });
+            }
+            
+            // Send a message
+            function sendMessage() {
+                const message = chatInput.value.trim();
+                if (!message) return;
+                
+                // Start chat if not started
+                if (!chatStarted) {
+                    startChat();
+                    return;
+                }
+                
+                // Add user message to chat
+                addMessage(message, true);
+                
+                // Clear input
+                chatInput.value = '';
+                
+                // Disable input while waiting for response
+                chatInput.disabled = true;
+                sendButton.disabled = true;
+                
+                // Show typing indicator
+                showTypingIndicator();
+                
+                // Send to server
+                fetch('/send_message', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: message })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    hideTypingIndicator();
+                    
+                    if (data.error) {
+                        addMessage(data.reply, false, true);
+                    } else if (data.awaiting_input) {
+                        addMessage(data.statement);
+                    } else if (data.reply) {
+                        addMessage(data.reply);
+                    }
+                    
+                    // Re-enable input
+                    chatInput.disabled = false;
+                    sendButton.disabled = false;
+                    chatInput.focus();
+                })
+                .catch(error => {
+                    console.error('Error sending message:', error);
+                    hideTypingIndicator();
+                    addMessage('There was an error processing your message. Please try again.', false, true);
+                    
+                    // Re-enable input
+                    chatInput.disabled = false;
+                    sendButton.disabled = false;
+                    chatInput.focus();
+                });
+            }
+            
+            // Event listeners
+            sendButton.addEventListener('click', sendMessage);
+            
+            chatInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+            
+            // Start the chat when the page loads
+            startChat();
+        });
+    </script>
+</body>
+</html>
