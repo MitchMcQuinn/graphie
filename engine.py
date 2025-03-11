@@ -341,25 +341,39 @@ class WorkflowEngine:
         Returns:
             The text with variables replaced
         """
-        # Find all variable references with pattern
-        pattern = r'@\{([^}]+)\}\.(\w+)'
-        matches = re.findall(pattern, text)
+        # Find all variable references with pattern @{node_id}.key or @{node_id}.key|default
+        pattern = r'@\{([^}]+)\}\.(\w+)(?:\|([^@]*))?'
+        
+        # First, collect all matches (important to avoid modifying the string while iterating)
+        matches = []
+        for match in re.finditer(pattern, text):
+            full_match = match.group(0)  # The entire matched text
+            node_id = match.group(1)
+            key = match.group(2)
+            default_value = match.group(3) if match.lastindex >= 3 else None
+            
+            matches.append((full_match, node_id, key, default_value))
         
         # Log for debugging
-        logger.info(f"Found variable references in text: {matches}")
+        logger.info(f"Found variable references: {matches}")
         logger.info(f"Current session data keys: {list(self.session_data.keys())}")
         
-        # Replace each match
-        for node_id, key in matches:
-            # We need to check if the key exists in session data
+        # Now process each match and replace in the text
+        for full_match, node_id, key, default_value in matches:
+            # Check if the key exists in session data
             if key in self.session_data:
                 value = self.session_data[key]
                 replacement = str(value)
-                logger.info(f"Replacing @{{{node_id}}}.{key} with '{replacement}'")
-                # Replace the variable reference with the value
-                text = text.replace(f'@{{{node_id}}}.{key}', replacement)
+                logger.info(f"Replacing '{full_match}' with value '{replacement}' from session")
+            elif default_value is not None:
+                replacement = default_value
+                logger.info(f"Variable @{{{node_id}}}.{key} not found in session data, using default value '{default_value}'")
             else:
-                logger.warning(f"Variable @{{{node_id}}}.{key} not found in session data")
+                logger.warning(f"Variable @{{{node_id}}}.{key} not found in session data and no default provided")
+                continue  # Skip this replacement
+            
+            # Replace the entire matched pattern with the replacement value
+            text = text.replace(full_match, replacement)
         
         return text
     

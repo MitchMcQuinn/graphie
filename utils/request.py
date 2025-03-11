@@ -60,4 +60,23 @@ def handle_user_response(session, user_response):
     # Mark the session as no longer awaiting input
     session['awaiting_input'] = False
     
+    # If this is a follow-up to a question, store the question-answer pair for context
+    if 'request_statement' in session:
+        question = session.get('request_statement', '')
+        
+        # Track conversation context
+        if 'conversation_context' not in session:
+            session['conversation_context'] = []
+            
+        # Add the question-answer pair to context
+        session['conversation_context'].append({
+            'question': question,
+            'answer': user_response
+        })
+        
+        # Log that we're preserving context
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Storing Q&A context: Question: '{question[:50]}...', Answer: '{user_response}'")
+    
     return {'status': 'input_received'}
