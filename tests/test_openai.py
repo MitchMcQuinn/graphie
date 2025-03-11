@@ -46,7 +46,7 @@ try:
     # Make a test API call
     logger.info("Making test API call...")
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",  # Using a less expensive model for testing
+        model="gpt-4-turbo",  # Using a less expensive model for testing
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello, this is a test message from Graphie. Please respond with 'OpenAI integration is working!' if you receive this."}
