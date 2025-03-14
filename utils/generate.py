@@ -12,11 +12,15 @@ Functionality:
     - Configures the OpenAI client with appropriate settings
     - Handles generation requests through the OpenAI API
     - Includes error handling and logging
+    - Supports structured output generation with JSON schemas
+    - Implements rate limiting to avoid API throttling
 """
 
 import os
 import logging
+import json
 from dotenv import load_dotenv
+from utils.rate_limiter import get_openai_limiter
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -29,8 +33,20 @@ api_key = os.getenv('OPENAI_API_KEY')
 
 def get_openai_client():
     try:
-        import httpx
-        from openai import OpenAI
+        # First, try to import the required modules
+        try:
+            import httpx
+        except ImportError:
+            logger.error("Missing dependency: 'httpx' package is not installed.")
+            logger.error("Please install it with: pip install httpx==0.25.0")
+            return None
+            
+        try:
+            from openai import OpenAI
+        except ImportError:
+            logger.error("Missing dependency: 'openai' package is not installed.")
+            logger.error("Please install it with: pip install openai")
+            return None
         
         # Create a transport with no proxies
         transport = httpx.HTTPTransport(proxy=None)
@@ -44,26 +60,51 @@ def get_openai_client():
         logger.error(f"Failed to initialize OpenAI client: {str(e)}")
         return None
 
+def _make_api_call(api_params, model):
+    """
+    Make an API call with rate limiting
+    
+    Args:
+        api_params: The parameters for the API call
+        model: The model name for rate limiting tracking
+        
+    Returns:
+        The API response or a default response on error
+    """
+    client = get_openai_client()
+    if not client:
+        raise Exception("Failed to initialize OpenAI client")
+    
+    try:
+        # Make the API call
+        logger.info(f"Making API call to model: {model}")
+        response = client.chat.completions.create(**api_params)
+        return response
+    except Exception as e:
+        logger.error(f"OpenAI API error: {str(e)}")
+        raise
+
 def generate(session, input_data):
     """
-    Generate a response using OpenAI API
+    Generate a response using OpenAI API with rate limiting
     
     Args:
         session: The current session object to store results
         input_data: Dict containing:
-            - type: Optional generation type ('answer' or 'followup')
+            - type: Generation type ('answer', 'followup', or 'structured')
             - system: System prompt
             - user: User message to respond to
             - temperature: Optional temperature setting (default 0.7)
             - model: Optional model name (default gpt-4)
             - include_history: Optional flag to include chat history (default True)
+            - response_format: Required for 'structured' type - contains JSON schema definition
     
     Returns:
-        The generated text
+        The generated text or JSON object for structured types
     """
     logger.info(f"Generate function received input_data: {input_data}")
     
-    # Determine generation type (answer or followup)
+    # Determine generation type (answer, followup, or structured)
     generation_type = input_data.get('type', 'answer')
     
     # Extract common parameters with defaults
@@ -174,62 +215,124 @@ Your follow-up question:'''
             session['generation'] = "I couldn't generate a response because the OpenAI API key is missing."
         return session['generation']
     
-    # Get the OpenAI client
-    client = get_openai_client()
-    if not client:
-        error_message = "Failed to initialize OpenAI client"
-        logger.error(error_message)
-        session['error'] = error_message
-        if generation_type == 'followup':
-            session['generation'] = "Is there anything else you'd like to know?"
-        else:
-            session['generation'] = "I'm sorry, I encountered an error while connecting to the AI service."
-        return session['generation']
+    # Prepare API parameters
+    api_params = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature
+    }
     
-    try:
-        # Make the API call - updated to use the client
-        logger.info(f"Making API call to model: {model}")
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature
-        )
-        
-        # Extract the generated text
-        generated_text = response.choices[0].message.content
-        
-        # For followup questions, clean up the text
-        if generation_type == 'followup':
-            # Clean up the text - strip any quotes or prefixes the model might add
-            generated_text = generated_text.strip('"\'')
-            if generated_text.lower().startswith("follow-up question:"):
-                generated_text = generated_text[len("follow-up question:"):].strip()
-        
-        logger.info(f"Generated text: {generated_text[:100]}..." if len(generated_text) > 100 else f"Generated text: {generated_text}")
-        
-        # Store the result in the session for later reference
-        session['generation'] = generated_text
-        logger.info("Generation stored in session")
-        
-        return generated_text
-    
-    except Exception as e:
-        error_message = f"Error generating response: {str(e)}"
-        logger.error(f"OpenAI API error: {error_message}")
-        session['error'] = error_message
-        
-        # Set a fallback generation message
-        if generation_type == 'followup':
-            # Provide a simple default follow-up
-            if 'main_topic' in locals():
-                default_question = f"Would you like to know more about {main_topic}?"
-            else:
-                default_question = "Is there anything else you'd like to know?"
-            session['generation'] = default_question
-            return default_question
-        else:
-            session['generation'] = "I'm sorry, I encountered an error while generating a response. Please check the API key or try again."
+    # For structured output, add response_format parameter
+    if generation_type == 'structured':
+        if 'response_format' not in input_data:
+            error_message = "response_format is required for structured generation type"
+            logger.error(error_message)
+            session['error'] = error_message
+            session['generation'] = "I couldn't generate a structured response because the schema is missing."
             return session['generation']
+        
+        # Get the JSON schema from input_data
+        json_schema = input_data.get('response_format')
+        
+        # Use function calling instead of response_format
+        function_name = input_data.get('function_name', 'get_structured_data')
+        function_description = input_data.get('function_description', 'Generate structured data based on the provided schema')
+        
+        # Create the function definition
+        function_def = {
+            "name": function_name,
+            "description": function_description,
+            "parameters": json_schema
+        }
+        
+        # Add function calling parameters to API params
+        api_params["tools"] = [{"type": "function", "function": function_def}]
+        api_params["tool_choice"] = {"type": "function", "function": {"name": function_name}}
+        
+        logger.info(f"Using function calling with schema: {json_schema}")
+        
+        # We need to remove response_format if it was added
+        if "response_format" in api_params:
+            del api_params["response_format"]
+    
+    # Use the rate limiter to make the API call
+    limiter = get_openai_limiter()
+    
+    # Create a function to execute the API call
+    def execute_api_call():
+        try:
+            # Make the API call using our helper function
+            response = _make_api_call(api_params, model)
+            
+            # Extract the generated text
+            generated_text = response.choices[0].message.content
+            
+            # For structured output, parse the JSON
+            if generation_type == 'structured':
+                try:
+                    # For function calling, we need to get the arguments from the tool calls
+                    if hasattr(response.choices[0].message, 'tool_calls') and response.choices[0].message.tool_calls:
+                        # Get the function arguments (which is a JSON string)
+                        generated_text = response.choices[0].message.tool_calls[0].function.arguments
+                    
+                    # Parse the JSON response
+                    generated_json = json.loads(generated_text)
+                    logger.info(f"Successfully parsed structured JSON response")
+                    
+                    # Store both the raw text and parsed JSON in the session
+                    session['generation_raw'] = generated_text
+                    session['generation'] = generated_json
+                    
+                    return generated_json
+                except json.JSONDecodeError as e:
+                    error_message = f"Failed to parse structured JSON response: {str(e)}"
+                    logger.error(error_message)
+                    session['error'] = error_message
+                    session['generation_raw'] = generated_text
+                    session['generation'] = {}
+                    return {}
+            
+            # For followup questions, clean up the text
+            if generation_type == 'followup':
+                # Clean up the text - strip any quotes or prefixes the model might add
+                generated_text = generated_text.strip('"\'')
+                if generated_text.lower().startswith("follow-up question:"):
+                    generated_text = generated_text[len("follow-up question:"):].strip()
+            
+            logger.info(f"Generated text: {generated_text[:100]}..." if len(generated_text) > 100 else f"Generated text: {generated_text}")
+            
+            # Store the result in the session for later reference
+            session['generation'] = generated_text
+            logger.info("Generation stored in session")
+            
+            return generated_text
+        except Exception as e:
+            error_message = f"Error generating response: {str(e)}"
+            logger.error(f"OpenAI API error: {error_message}")
+            session['error'] = error_message
+            
+            # Set a fallback generation message
+            if generation_type == 'followup':
+                # Provide a simple default follow-up
+                if 'main_topic' in locals():
+                    default_question = f"Would you like to know more about {main_topic}?"
+                else:
+                    default_question = "Is there anything else you'd like to know?"
+                session['generation'] = default_question
+                return default_question
+            elif generation_type == 'structured':
+                session['generation'] = {}
+                return {}
+            else:
+                session['generation'] = "I'm sorry, I encountered an error while generating a response. Please check the API key or try again."
+                return session['generation']
+    
+    # Queue the API request with the rate limiter
+    # This is a blocking call that will execute when a token is available
+    limiter.queue_request(execute_api_call, model)
+    
+    # Return the result from the session
+    return session.get('generation', "I'm processing your request...")
 
 # Keep the generate_followup function as a wrapper for backward compatibility
 def generate_followup(session, input_data):
@@ -251,3 +354,120 @@ def generate_followup(session, input_data):
     
     # Call the main generate function
     return generate(session, input_data)
+
+"""
+Example usage for the structured generation type:
+
+```python
+# Session object to store results
+session = {}
+
+# Example JSON schema for a product recommendation
+product_schema = {
+    "type": "object",
+    "properties": {
+        "product_name": {
+            "type": "string",
+            "description": "The name of the recommended product"
+        },
+        "price_range": {
+            "type": "object",
+            "properties": {
+                "min": {
+                    "type": "number",
+                    "description": "Minimum price in USD"
+                },
+                "max": {
+                    "type": "number",
+                    "description": "Maximum price in USD"
+                }
+            },
+            "required": ["min", "max"]
+        },
+        "features": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "List of key product features"
+        },
+        "rating": {
+            "type": "number",
+            "description": "Estimated product rating on a scale of 1-5"
+        },
+        "explanation": {
+            "type": "string",
+            "description": "Explanation of why this product is recommended"
+        }
+    },
+    "required": ["product_name", "price_range", "features", "rating", "explanation"]
+}
+
+# Input data for structured generation
+input_data = {
+    "type": "structured",
+    "system": "You are a product recommendation assistant that helps users find the best products based on their needs.",
+    "user": "I need a laptop for video editing, budget around $2000",
+    "temperature": 0.7,
+    "model": "gpt-4-turbo",
+    "function_name": "recommend_product",
+    "function_description": "Generate a product recommendation based on user requirements",
+    "response_format": product_schema
+}
+
+# Generate structured response
+result = generate(session, input_data)
+
+# Access the structured data
+print(f"Recommended product: {result['product_name']}")
+print(f"Price range: ${result['price_range']['min']} - ${result['price_range']['max']}")
+print(f"Features: {', '.join(result['features'])}")
+print(f"Rating: {result['rating']}/5")
+print(f"Explanation: {result['explanation']}")
+```
+
+The result will be a JSON object that can be accessed like a dictionary:
+
+```json
+{
+  "product_name": "MacBook Pro 16-inch",
+  "price_range": {
+    "min": 1999.0,
+    "max": 2499.0
+  },
+  "features": [
+    "M3 Pro or M3 Max chip",
+    "16GB to 32GB unified memory",
+    "1TB SSD storage",
+    "16-inch Liquid Retina XDR display",
+    "Dedicated GPU cores for video rendering"
+  ],
+  "rating": 4.8,
+  "explanation": "The MacBook Pro 16-inch is ideal for video editing due to its powerful M3 chip, which excels at video rendering tasks. The large high-resolution display provides accurate color representation, and the unified memory architecture allows for faster video processing. It fits within your $2000 budget for the base model, though you may want to consider upgrading memory if your video projects are complex."
+}
+```
+
+In a Neo4j workflow context, this would allow accessing structured fields in subsequent steps:
+
+```cypher
+CREATE (n:STEP {
+  id: 'product-recommendation',
+  function: 'generate.generate',
+  input: '{
+    "type": "structured", 
+    "system": "You are a product recommendation assistant...", 
+    "user": "@{get-requirements}.response", 
+    "function_name": "recommend_product",
+    "function_description": "Generate a product recommendation based on user requirements",
+    "response_format": {...schema object...}
+  }'
+})
+
+// Then in a next step, access specific fields from the result
+CREATE (m:STEP {
+  id: 'display-price',
+  function: 'some.function',
+  input: '{"min_price": "@{product-recommendation}.price_range.min", "max_price": "@{product-recommendation}.price_range.max"}'
+})
+```
+"""

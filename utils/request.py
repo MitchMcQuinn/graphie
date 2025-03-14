@@ -57,6 +57,9 @@ def handle_user_response(session, user_response):
     # Store the user's response in the session
     session['response'] = user_response
     
+    # Store the user's input in a standardized key for other functions to access
+    session['user_input'] = user_response
+    
     # Mark the session as no longer awaiting input
     session['awaiting_input'] = False
     

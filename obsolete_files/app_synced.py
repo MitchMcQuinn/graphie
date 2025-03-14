@@ -4,7 +4,7 @@ import logging
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for, Response
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
-from engine import get_synced_workflow_engine
+from synced_engine import get_synced_workflow_engine
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

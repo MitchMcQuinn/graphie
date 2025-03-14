@@ -1,6 +1,6 @@
-# Graphie - A Neo4j-Powered Conversational Workflow Engine
+# Graphie - A Neo4j-Powered Conversational Workflow Engine with Synchronized Variable Handling
 
-Graphie is a flexible, graph-based conversational workflow engine that uses Neo4j to define and manage interactive chat flows. It enables building structured conversations with AI assistance and human-in-the-loop interactions.
+Graphie is a flexible, graph-based conversational workflow engine that uses Neo4j to define and manage interactive chat flows. It enables building structured conversations with AI assistance and human-in-the-loop interactions, with advanced support for parallel workflows and synchronized variable handling.
 
 ## Overview
 
@@ -8,21 +8,34 @@ Graphie provides a framework where conversational workflows are defined as graph
 
 - **Graph-driven workflows:** Define complex conversational flows through Neo4j graph structures
 - **Stateful context management:** Maintain conversation context across multiple interactions
+- **Parallel workflow paths:** Process multiple workflow branches simultaneously
+- **Synchronized variable handling:** Auto-defer steps until required variables become available
 - **OpenAI integration:** Generate AI responses through seamless OpenAI API integration
 - **Human-in-the-loop design:** Interactively gather user input at defined points in workflows
 - **Variable passing:** Reference outputs from previous steps in subsequent actions
 - **Default values:** Provide fallback values for variable references, enabling more resilient workflows
 - **Looping workflows:** Create iterative conversation patterns with cyclic graph structures
 - **Conditional branching:** Create dynamic conversations with branching logic
+- **Real-time debugging:** Monitor workflow execution and variable states
 
 ## System Architecture
 
 ### Core Components
 
 1. **Web Interface (Flask)**: Manages the user interface and API endpoints
-2. **Workflow Engine**: Processes workflow steps and handles the conversation flow logic
-3. **Neo4j Database**: Stores the workflow definitions using a graph structure and additional memory for the agent to reference on-demand
-4. **Utility Modules**: Provides functionality for generating responses, requesting user input, and replying to users
+2. **Synced Workflow Engine**: Processes workflow steps with intelligent variable synchronization
+3. **Neo4j Database**: Stores the workflow definitions using a graph structure
+4. **Utility Modules**: Provides functionality for generating responses, analyzing input, and replying to users
+
+### Engine Evolution
+
+Graphie has evolved through several engine implementations:
+
+1. **Original Engine (engine.py)**: Basic workflow processing
+2. **Fixed Engine (fixed_engine.py)**: Added support for parallel path processing
+3. **Synced Engine (engine.py)**: Enhanced with variable synchronization and deferred processing
+
+The current implementation is the Synced Engine, which builds on top of the fixed engine but adds improved variable handling.
 
 ### Workflow Ontology
 
@@ -32,7 +45,7 @@ The workflow system uses the following Neo4j structure:
 Each step in a workflow is represented by a node with properties:
 - `id`: Unique identifier for referencing the step
 - `description`: Human-readable description of the step's purpose
-- `function`: Action to execute (e.g., `generate.generate`, `request.request`, `reply.reply`)
+- `function`: Action to execute (e.g., `analyze.analyze_input`, `request.request`, `fixed_reply.fixed_reply`)
 - `input`: JSON-formatted parameters for the function
 
 #### NEXT Relationships
@@ -42,63 +55,85 @@ Connections between steps with properties:
 - `function`: Optional conditional function that determines if this path should be taken
 - `input`: Parameters for the condition function
 
-### Core Utilities
+## Synced Workflow Engine Features
 
-Graphie includes three primary utility modules:
+### Key Features
 
-#### 1. `generate.py`
-Integrates with OpenAI to generate AI responses:
-```python
-# Example usage in workflow
-{
-  "function": "generate.generate",
-  "input": {
-    "system": "You are a helpful assistant skilled in answering questions about Neo4j.",
-    "user": "@{get-question}.response",
-    "temperature": "0.7",
-    "model": "gpt-4-turbo"
-  }
-}
+1. **Indefinite Variable Readiness Checks**: The engine will keep trying to resolve variables as long as the session is active, rather than giving up after a few attempts.
+
+2. **Deferred Step Processing**: Steps that reference unavailable variables are automatically deferred and retried later, allowing the workflow to continue with other paths.
+
+3. **Non-Blocking Architecture**: Uses threading to manage retries without blocking the main execution path, ensuring responsive UI.
+
+4. **Enhanced Debugging**: Provides additional endpoints to monitor variable availability and deferred steps.
+
+5. **Session Management**: Properly tracks whether a session is active to avoid unnecessary processing.
+
+### How It Works
+
+#### Variable Resolution Process
+
+1. When a workflow step is processed, the engine first checks if all required variables are available.
+2. If variables are missing, the step is marked as "deferred" and queued for later processing.
+3. A background thread is scheduled to retry the step after a delay.
+4. The retry process continues indefinitely as long as the session remains active.
+5. Once all variables become available, the deferred step is processed, and the workflow continues.
+
+#### Example Scenario
+
+Consider a workflow with parallel paths:
+- Path A: Analyzes sentiment (slow operation)
+- Path B: Extracts entities (fast operation)
+- Path C: Summarizes both results (depends on A and B)
+
+With the synced engine:
+1. Paths A and B start executing in parallel
+2. Path B completes quickly and updates the session with entity data
+3. Path C tries to execute but needs data from Path A, so it's deferred
+4. Path A eventually completes and updates the session with sentiment data
+5. The deferred Path C is automatically retried, finds all variables available, and completes successfully
+
+## Usage
+
+### Running the Application
+
+```bash
+# Make the setup script executable
+chmod +x setup.sh
+
+# Run the setup script
+./setup.sh
 ```
 
-#### 2. `request.py`
-Manages human-in-the-loop interactions by pausing the workflow and awaiting user input:
-```python
-# Example usage in workflow
-{
-  "function": "request.request",
-  "input": {
-    "statement": "What would you like to know about graph databases?"
-  }
-}
-```
+### Debugging Endpoints
 
-#### 3. `reply.py`
-Sends responses to the user interface:
-```python
-# Example usage in workflow
-{
-  "function": "reply.reply",
-  "input": {
-    "reply": "Here's the information you requested: @{generate-answer}.generation"
-  }
-}
-```
+- `/debug_workflow`: Overview of workflow state, paths, and deferred steps
+- `/debug_variables`: Detailed view of variable availability and what deferred steps are waiting for
+- `/stream_log`: Real-time streaming of log events for debugging
 
-## Variable Reference System
+## Implementation Details
 
-Graphie includes a powerful variable reference system to pass data between workflow steps:
+The implementation consists of:
 
-- **Basic Syntax**: `@{node_id}.key` 
-- **Example**: `@{get-question}.response` references the user's response from a step with ID `get-question`
-- **Default Values**: `@{node_id}.key|default_value` - If the referenced variable doesn't exist, the default value is used
-- **Example with Default**: `@{user-input}.response|"No input provided"` - Uses "No input provided" if the response is missing
-- **Implementation**: Variables are processed by the workflow engine, which replaces references with actual values before executing functions
+1. **engine.py**: The main workflow engine with variable synchronization
+2. **app.py**: Flask application using the engine
+3. **setup.sh**: Script to set up and run the implementation
+4. **Utils modules**: Modules for analysis, request handling, and fixed replies
 
-The default value capability is particularly useful for:
-- Creating resilient workflows that can handle missing or incomplete data
-- Enabling looping workflows by providing initial values for variables that will be populated in later iterations
-- Establishing fallback content for optional user inputs
+### Key Methods
+
+- `_replace_variables`: Detects missing variables and returns None to trigger deferral
+- `_process_step`: Handles variable resolution failures by deferring steps
+- `_retry_deferred_step`: Manages the retry process for deferred steps
+- `mark_session_inactive`: Stops retrying when a session ends
+
+## Limitations
+
+1. The current implementation uses a simple thread-based approach for retries, which may not be optimal for very high-concurrency systems.
+
+2. There's no maximum lifetime for deferred steps, which could potentially lead to resource issues in long-running sessions.
+
+3. Variable dependencies are only tracked at the step level, not at the individual variable level, which may lead to unnecessary retries.
 
 ## Complete Workflow Example
 
@@ -181,12 +216,6 @@ CREATE
   })
 ```
 
-This workflow demonstrates several key features:
-1. **Looping capability**: The workflow can loop back from `more_questions` to `get_question` when the user wants to continue
-2. **Default value usage**: The `conversation-history` step uses `@{conversation-history}.history|[]` to initialize with an empty array on first execution
-3. **Stateful context**: The conversation history accumulates across multiple iterations of the loop
-4. **Conditional branching**: Different paths are taken based on the user's response to continue or end the workflow
-
 ## Running the Application
 
 ### Prerequisites
@@ -218,11 +247,11 @@ FLASK_SECRET_KEY=your_secret_key
 3. Set up the Neo4j database with your workflow
 
 ### Starting the Application
-Run the Flask application:
+Run the setup script:
 ```
-python app.py
+./setup.sh
 ```
-The web interface will be available at http://localhost:5000
+The web interface will be available at http://localhost:5001
 
 ## Extending Functionality
 
@@ -320,3 +349,31 @@ Use the built-in logging system to troubleshoot issues:
 - [Neo4j Documentation](https://neo4j.com/docs/)
 - [OpenAI API Documentation](https://platform.openai.com/docs/api-reference)
 - [Flask Documentation](https://flask.palletsprojects.com/)
+
+## Project Structure
+
+The project uses the following structure:
+
+- **Core Application:**
+  - **app.py**: Main Flask application
+  - **engine.py**: Synced workflow engine with variable synchronization
+  - **fixed_engine.py**: Foundation engine that is extended by the synced engine
+  - **setup.sh**: Main script to set up and start the application
+
+- **Utilities:**
+  - **utils/**: Utility modules (analyze, request, fixed_reply, etc.)
+  - **tools/**: Scripts for managing and updating the workflow
+
+- **Documentation:**
+  - **docs/**: Documentation files including maintenance guide
+  - **examples/**: Example workflow definitions in Cypher
+
+- **Testing:**
+  - **tests/**: Test and debugging scripts
+
+- **Web Interface:**
+  - **templates/**: HTML templates
+  - **static/**: Static assets (CSS, JS, etc.)
+
+- **Other:**
+  - **obsolete_files/**: Archived old versions (for reference)

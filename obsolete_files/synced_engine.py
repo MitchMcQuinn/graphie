@@ -28,11 +28,7 @@ class SyncedWorkflowEngine(FixedWorkflowEngine):
             max_parallel_paths: Maximum number of parallel paths to process
             retry_delay: Delay in seconds between retries for variable readiness
         """
-        # Call parent constructor without arguments
-        super().__init__()
-        
-        # Set max_parallel_paths manually
-        self.max_parallel_paths = max_parallel_paths
+        super().__init__(max_parallel_paths)
         self.retry_delay = retry_delay
         self.deferred_steps = {}  # Track steps deferred due to missing variables
         self.session_active = True

@@ -132,7 +132,7 @@ class WorkflowViewer:
         # Find the root node
         root_id = None
         for node_id, node in workflow['nodes'].items():
-            if node_id == 'root':
+            if node_id == 'root-2':
                 root_id = node_id
                 break
         
