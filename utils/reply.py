@@ -1,3 +1,8 @@
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
 def reply(session, input_data):
     """
     Simply forwards a response to the user in the chat window
@@ -11,8 +16,6 @@ def reply(session, input_data):
         The reply that was sent
     """
     # Extract the reply to send to the user
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"Reply function received input_data: {input_data}")
     
     # Check if we received an unprocessed variable reference
@@ -37,25 +40,31 @@ def reply(session, input_data):
     
     # If we still don't have a reply, extract it from input_data
     if 'reply' not in input_data:
-        reply_text = input_data.get('reply', '')
+        reply_text = "I don't have a specific reply to share right now."
     else:
         reply_text = input_data['reply']
     
     logger.info(f"Final reply text: {reply_text}")
     
-    # Store this reply in the session
-    # This will be sent to the front-end to display to the user
-    session['last_reply'] = reply_text
-    logger.info(f"Set session last_reply to: {reply_text}")
-    
-    # Store a formatted message for the chat history
-    if 'chat_history' not in session:
-        session['chat_history'] = []
+    try:
+        # Safely update the session with the reply
+        # This will be sent to the front-end to display to the user
+        session['last_reply'] = reply_text
+        logger.info(f"Set session last_reply to: {reply_text}")
         
-    session['chat_history'].append({
-        'role': 'assistant',
-        'content': reply_text
-    })
+        # Store a formatted message for the chat history
+        if 'chat_history' not in session:
+            session['chat_history'] = []
+            
+        session['chat_history'].append({
+            'role': 'assistant',
+            'content': reply_text
+        })
+    except Exception as e:
+        # If we can't update the session directly, just log it
+        # This could happen if we're in a background thread
+        logger.error(f"Error updating session: {str(e)}")
+        # But still return the reply text so the caller can handle it
     
     return reply_text
 
@@ -72,9 +81,7 @@ def respond(session, input_data):
     Returns:
         The response that was sent
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Reply function received input_data: {input_data}")
+    logger.info(f"Respond function received input_data: {input_data}")
     
     # Check if we received an unprocessed variable reference
     if 'response' in input_data and isinstance(input_data['response'], str):
@@ -98,4 +105,6 @@ def respond(session, input_data):
         input_data['reply'] = input_data.pop('response')
     
     logger.info(f"Processed input data: {input_data}")
+    
+    # Call the reply function
     return reply(session, input_data)

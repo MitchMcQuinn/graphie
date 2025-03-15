@@ -45,34 +45,32 @@ def update_workflow():
         logger.info("Connected to Neo4j successfully")
         
         with driver.session() as session:
-            # Update all reply/respond functions to use the fixed implementations
+            # Update node functions to use appropriate modules
             result = session.run(
                 """
                 MATCH (n:STEP)
-                WHERE n.function = 'reply.reply' OR n.function = 'reply.respond'
-                SET n.function = CASE 
-                    WHEN n.function = 'reply.reply' THEN 'fixed_reply.fixed_reply'
-                    WHEN n.function = 'reply.respond' THEN 'fixed_reply.fixed_respond'
-                    ELSE n.function
+                SET n.function = CASE
+                WHEN n.function = 'reply.reply' THEN 'reply.reply'
+                WHEN n.function = 'reply.respond' THEN 'reply.respond'
+                ELSE n.function
                 END
-                RETURN COUNT(n) as updatedNodes
+                RETURN COUNT(n) as updated
                 """
             )
-            record = result.single()
-            logger.info(f"Updated {record['updatedNodes']} nodes to use fixed reply functions")
+            logger.info(f"Updated node functions where needed")
             
-            # Make sure root-2 node exists (if it's not already there)
+            # Make sure root exists
             result = session.run(
                 """
-                MERGE (root:STEP {id: 'root-2'})
+                MERGE (n:STEP {id: 'root-2'})
                 ON CREATE SET 
-                    root.description = 'Root node for the workflow',
-                    root.function = 'fixed_reply.fixed_reply',
-                    root.input = '{"reply": "Hello! I am your assistant. How can I help you today?"}'
-                RETURN root
+                    n.description = 'Secondary entry point for workflow',
+                    n.function = 'reply.reply',
+                    n.input = '{"reply": "I can analyze animals and sentiment in your text. Please tell me something about an animal."}'
+                RETURN n
                 """
             )
-            logger.info("Ensured root-2 node exists in the workflow")
+            logger.info("Ensured root node exists")
             
             # Make sure get-input node exists
             result = session.run(
@@ -87,7 +85,7 @@ def update_workflow():
             )
             logger.info("Ensured get-input node exists")
             
-            # Add connection from root-2 to get-input if it doesn't exist
+            # Add connection from root to get-input if it doesn't exist
             result = session.run(
                 """
                 MATCH (root:STEP {id: 'root-2'}), (input:STEP {id: 'get-input'})
@@ -157,10 +155,10 @@ def update_workflow():
                 MERGE (n:STEP {id: 'return-animal'})
                 ON CREATE SET 
                     n.description = 'Reply with extracted animal name',
-                    n.function = 'fixed_reply.fixed_reply',
+                    n.function = 'reply.reply',
                     n.input = '{"reply": "I notice you mentioned @{extract-animal}.animals. @{analyze-input}.sentiment Would you like to know more about this animal?"}'
                 ON MATCH SET 
-                    n.function = 'fixed_reply.fixed_reply',
+                    n.function = 'reply.reply',
                     n.input = '{"reply": "I notice you mentioned @{extract-animal}.animals. @{analyze-input}.sentiment Would you like to know more about this animal?"}'
                 RETURN n
                 """
@@ -208,7 +206,7 @@ def update_workflow():
                 MERGE (n:STEP {id: 'continue-yes'})
                 ON CREATE SET 
                     n.description = 'User wants to continue',
-                    n.function = 'fixed_reply.fixed_reply',
+                    n.function = 'reply.reply',
                     n.input = '{"reply": "Great! How can I help you?"}'
                 RETURN n
                 """
@@ -220,7 +218,7 @@ def update_workflow():
                 MERGE (n:STEP {id: 'continue-no'})
                 ON CREATE SET 
                     n.description = 'User does not want to continue',
-                    n.function = 'fixed_reply.fixed_reply',
+                    n.function = 'reply.reply',
                     n.input = '{"reply": "Thank you for chatting with me today. Goodbye!"}'
                 RETURN n
                 """
@@ -260,6 +258,19 @@ def update_workflow():
                 """
             )
             logger.info("Ensured connection from continue-yes back to get-input")
+            
+            # Make sure show-analysis exists
+            result = session.run(
+                """
+                MERGE (n:STEP {id: 'show-analysis'})
+                ON CREATE SET 
+                    n.description = 'Show analyses from both paths',
+                    n.function = 'reply.reply',
+                    n.input = '{"reply": "Analysis complete. Animal: @{extract-animal}.animals, Sentiment: @{analyze-input}.sentiment"}'
+                RETURN n
+                """
+            )
+            logger.info("Ensured show-analysis node exists")
             
             # Get stats about workflow
             result = session.run(

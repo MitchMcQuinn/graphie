@@ -98,9 +98,9 @@ Graphie is a Neo4j-powered conversational workflow engine built on a modular arc
   - `not_equals()`: Checks if values don't match
   - `contains()`: Checks if a value contains a substring
 
-#### `fixed_reply.py` (111 lines)
-- **Purpose**: Provides functions for generating fixed replies
-- **Key Function**: `fixed_reply()`: Returns predefined responses
+#### `reply.py` (111 lines)
+- **Purpose**: Provides functions for generating replies to the user
+- **Key Function**: `reply()`: Returns predefined responses, with robust error handling for session updates
 
 #### `generate.py` (474 lines)
 - **Purpose**: Handles AI-generated content using OpenAI's API
@@ -109,10 +109,6 @@ Graphie is a Neo4j-powered conversational workflow engine built on a modular arc
 #### `rate_limiter.py` (201 lines)
 - **Purpose**: Manages API rate limiting for external services
 - **Key Function**: `limit_api_calls()`: Throttles API requests
-
-#### `reply.py` (102 lines)
-- **Purpose**: Manages replies to the user
-- **Key Function**: `reply()`: Formats and sends responses to users
 
 #### `request.py` (86 lines)
 - **Purpose**: Handles user input requests
@@ -205,7 +201,7 @@ The current workflow implementation in Neo4j consists of the following key nodes
    - Stores: Sentiment analysis in the `sentiment` variable
 
 5. **`return-animal`**: Creates a response about the mentioned animal
-   - Function: `fixed_reply.fixed_reply`
+   - Function: `reply.reply`
    - Input: References both `@{extract-animal}.animals` and `@{analyze-input}.sentiment`
    - Purpose: Demonstrates variable synchronization between parallel paths
 
@@ -214,7 +210,7 @@ The current workflow implementation in Neo4j consists of the following key nodes
    - Purpose: Creates a loop in the conversation flow
 
 7. **`show-analysis`**: Shows detailed analysis results
-   - Function: `fixed_reply.fixed_reply`
+   - Function: `reply.reply`
    - Input: References various analysis results
    - Purpose: Displays comprehensive analysis of user input
 

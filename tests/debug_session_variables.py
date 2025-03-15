@@ -1,13 +1,14 @@
 import os
 import logging
 import json
+import sys
 from dotenv import load_dotenv
 from utils.analyze import analyze_input
 from utils.structured_generation import format_analysis
-from utils.fixed_reply import fixed_reply
+from utils.reply import reply
 
-# Set up detailed logging
-logging.basicConfig(level=logging.DEBUG)
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def test_session_variables():
@@ -71,7 +72,7 @@ def test_session_variables():
         return_animal_input['reply'] = return_animal_input['reply'].replace('@{analyze-input}.sentiment', session['sentiment'])
     
     logger.info(f"Testing return-animal with input: {return_animal_input}")
-    result = fixed_reply(session, return_animal_input)
+    result = reply(session, return_animal_input)
     logger.info(f"Fixed reply result: {result}")
     logger.info(f"Session after fixed reply: {session}")
     

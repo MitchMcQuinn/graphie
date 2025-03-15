@@ -27,29 +27,32 @@ def fix_show_analysis_node():
         logger.info("Connected to Neo4j successfully")
         
         with driver.session() as session:
-            # Update the provide-analysis node to properly use our variables
-            result = session.run("""
+            # Update provide-analysis node to use fixed_reply instead of format_analysis
+            result = session.run(
+                """
                 MATCH (n:STEP {id: 'provide-analysis'})
-                SET n.function = 'utils.fixed_reply.fixed_reply',
-                    n.input = '{"reply": "Based on your message, I detected the following: sentiment - @{analyze-input}.sentiment. Extracted animals: @{extract-animal}.animals."}'
-                RETURN n.id as id
-            """)
+                WHERE n.function = 'utils.format_analysis.format_analysis'
+                SET n.function = 'utils.reply.reply',
+                    n.input = '{"reply": "Analysis results: Animal: @{extract-animal}.animals, Sentiment: @{analyze-input}.sentiment"}'
+                RETURN n
+                """
+            )
             
-            updated = list(result)
-            for node in updated:
-                logger.info(f"Updated {node['id']} to use fixed_reply instead of format_analysis")
+            for node in result:
+                logger.info(f"Updated {node['id']} to use reply instead of format_analysis")
             
-            # Update the show-analysis node to directly reference sentiment
-            result = session.run("""
+            # Update show-analysis node to use fixed_reply with direct variable references
+            result = session.run(
+                """
                 MATCH (n:STEP {id: 'show-analysis'})
-                SET n.function = 'utils.fixed_reply.fixed_reply',
-                    n.input = '{"reply": "Here is what I found in your message: @{analyze-input}.sentiment You mentioned: @{extract-animal}.animals"}'
-                RETURN n.id as id
-            """)
+                SET n.function = 'utils.reply.reply',
+                    n.input = '{"reply": "Analysis complete. Animal: @{extract-animal}.animals, Sentiment: @{analyze-input}.sentiment"}'
+                RETURN n
+                """
+            )
             
-            updated = list(result)
-            for node in updated:
-                logger.info(f"Updated {node['id']} to use fixed_reply and direct variable references")
+            for node in result:
+                logger.info(f"Updated {node['id']} to use reply and direct variable references")
             
         # Close the Neo4j connection
         driver.close()
