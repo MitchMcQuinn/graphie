@@ -80,7 +80,8 @@ with driver.session() as session:
     record = provide_answer_result.single()
     print(f"Updated {record['n.id']} node with input: {record['n.input']}")
     
-    # Generate-followup node - Using response_key for direct output format
+    # Generate-followup node - Properly configured for direct response format
+    # Important: 1) Removed schema parameter, 2) Added response_key parameter
     generate_followup_result = session.run("""
     MATCH (n:STEP {id: 'generate-followup'})
     SET n.input = '{
