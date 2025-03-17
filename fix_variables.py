@@ -1,6 +1,12 @@
 import os
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
+import json
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv('.env.local')
@@ -23,84 +29,98 @@ with driver.session() as session:
         print(f"Node ID: {record['n.id']}")
         print(f"Input: {record['n.input']}\n")
 
-# Now update nodes with proper variable references
+# Now update all STEP nodes to ensure proper variable references and consistent output format
 with driver.session() as session:
-    # Fix get-question node - simplify by using a hardcoded greeting
-    get_question_result = session.run("""
-    MATCH (n:STEP {id: 'get-question'})
-    SET n.input = '{"query": "Hello! How can I help you today?"}'
-    RETURN n.id, n.input
+    # First remove any unnecessary nodes from the workflow
+    check_ask_followup = session.run("""
+    MATCH (n:STEP {id: 'ask-followup'})
+    RETURN count(n) as count
     """)
+    
+    if check_ask_followup.single()['count'] > 0:
+        print("Removing ask-followup node")
+        session.run("""
+        MATCH (n:STEP {id: 'ask-followup'})
+        DETACH DELETE n
+        """)
+    
+    # Update each node to ensure proper variables and references
+    
+    # Get-question node
+    get_question_result = session.run('''
+    MATCH (n:STEP {id: 'get-question'})
+    SET n.input = '{"query": "@{SESSION_ID}.generate-followup.response|GM! How can I help you today?"}'
+    RETURN n.id, n.input
+    ''')
     record = get_question_result.single()
     print(f"Updated {record['n.id']} node with input: {record['n.input']}")
     
-    # Fix generate-answer node to correctly access user input
+    # Generate-answer node - Updated to use response_key for consistent output format
     generate_answer_result = session.run("""
     MATCH (n:STEP {id: 'generate-answer'})
     SET n.input = '{
   "model": "gpt-4o-mini",
   "temperature": 0.7,
   "system": "You are a helpful assistant specializing in explaining topics in a user-friendly way. Provide clear explanations that assume no prior knowledge. Maintain the conversation context and topic throughout your responses.",
-  "user": "@{response}",
+  "user": "@{SESSION_ID}.get-question.response",
   "include_history": true,
-  "directly_set_reply": true,
-  "schema": {
-    "type": "object",
-    "properties": {
-      "response": {
-        "type": "string",
-        "description": "The main response to the user query"
-      },
-      "key_points": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "Key points covered in the response"
-      }
-    },
-    "required": ["response", "key_points"]
-  }
+  "response_key": "response"
 }'
     RETURN n.id, n.input
     """)
     record = generate_answer_result.single()
     print(f"Updated {record['n.id']} node with input: {record['n.input']}")
     
-    # Fix provide-answer node - simplify to use last_reply
+    # Provide-answer node
     provide_answer_result = session.run("""
     MATCH (n:STEP {id: 'provide-answer'})
-    SET n.input = '{"response": "@{last_reply}"}'
+    SET n.input = '{"response": "@{SESSION_ID}.generate-answer.response"}'
     RETURN n.id, n.input
     """)
     record = provide_answer_result.single()
     print(f"Updated {record['n.id']} node with input: {record['n.input']}")
     
-    # Fix generate-followup node - simplify to use a cleaner format
+    # Generate-followup node - Using response_key for direct output format
     generate_followup_result = session.run("""
     MATCH (n:STEP {id: 'generate-followup'})
     SET n.input = '{
-  "system": "You are creating helpful follow-up questions for a conversational assistant. Your task is to generate a single follow-up question related to the previous response.", 
-  "temperature": 0.7, 
   "model": "gpt-4-turbo",
-  "user": "@{last_reply}",
-  "directly_set_reply": true,
+  "temperature": 0.7,
+  "system": "You are creating a follow-up question for a conversational assistant. Generate a single relevant follow-up question based on the previous response.",
+  "user": "@{SESSION_ID}.generate-answer.response",
   "include_history": true,
-  "schema": {
-    "type": "object",
-    "properties": {
-      "response": {
-        "type": "string",
-        "description": "A single helpful follow-up question related to the previous topic"
-      }
-    },
-    "required": ["response"]
-  }
+  "max_tokens": 100,
+  "response_key": "response"
 }'
     RETURN n.id, n.input
     """)
     record = generate_followup_result.single()
     print(f"Updated {record['n.id']} node with input: {record['n.input']}")
+    
+    # Ensure connections are set up properly to match the desired workflow
+    print("Checking and fixing workflow connections...")
+    
+    # Make sure generate-followup connects back to get-question (circular flow)
+    check_connection = session.run("""
+    MATCH (source:STEP {id: 'generate-followup'})-[:NEXT]->(target:STEP {id: 'get-question'})
+    RETURN count(*) as count
+    """)
+    
+    if check_connection.single()['count'] == 0:
+        print("Creating connection from generate-followup to get-question")
+        session.run("""
+        MATCH (source:STEP {id: 'generate-followup'}), (target:STEP {id: 'get-question'})
+        CREATE (source)-[:NEXT]->(target)
+        """)
+    
+    # Verify all workflow connections
+    connection_check = session.run("""
+    MATCH path = (root:STEP {id: 'root'})-[:NEXT*]->(n:STEP)
+    RETURN [step in nodes(path) | step.id] as workflow_path
+    """)
+    
+    for record in connection_check:
+        print(f"Flow path: {' -> '.join(record['workflow_path'])}")
 
 # Close the connection
 driver.close()

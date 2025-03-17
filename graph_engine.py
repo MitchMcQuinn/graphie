@@ -22,6 +22,7 @@ from typing import Dict, List, Any, Optional, Union
 from engine import get_neo4j_driver
 from utils.resolve_variable import resolve_variable, process_variables
 from utils.store_memory import store_memory
+from utils.session_manager import get_session_manager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,11 @@ class GraphWorkflowEngine:
         self.driver = get_neo4j_driver()
         if not self.driver:
             logger.error("Failed to initialize Neo4j driver")
+        
+        # Initialize session manager
+        self.session_manager = get_session_manager(self.driver)
+        if not self.session_manager:
+            logger.error("Failed to initialize session manager")
     
     def create_session(self) -> str:
         """
@@ -51,44 +57,19 @@ class GraphWorkflowEngine:
             logger.error("Cannot create session: Neo4j driver not available")
             return session_id
         
-        try:
-            with self.driver.session() as db_session:
-                # Create the SESSION node with complex objects as JSON strings
-                db_session.run("""
-                    CREATE (s:SESSION {
-                        id: $session_id,
-                        memory: $memory,
-                        next_steps: $next_steps,
-                        created_at: datetime(),
-                        status: 'active',
-                        errors: $errors,
-                        chat_history: $chat_history
-                    })
-                """, 
-                session_id=session_id,
-                memory='{}',  # Empty JSON object
-                errors='[]',  # Empty JSON array
-                chat_history='[]',  # Empty JSON array
-                next_steps=['root']  # Initial next steps
-                )
-                
-                logger.info(f"Created new SESSION node with ID: {session_id}")
-                
-                # Verify the session was created
-                result = db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    RETURN count(s) as count
-                """, session_id=session_id)
-                
-                record = result.single()
-                if record and record['count'] > 0:
-                    logger.info(f"Verified SESSION node with ID: {session_id} exists")
-                else:
-                    logger.error(f"Failed to create SESSION node with ID: {session_id}")
-                
-                return session_id
-        except Exception as e:
-            logger.error(f"Error creating session: {str(e)}")
+        # Use the session manager to create the session
+        if self.session_manager.create_session(session_id):
+            logger.info(f"Created new SESSION node with ID: {session_id}")
+            
+            # Verify the session was created
+            if self.session_manager.has_session(session_id):
+                logger.info(f"Verified SESSION node with ID: {session_id} exists")
+            else:
+                logger.error(f"Failed to create SESSION node with ID: {session_id}")
+            
+            return session_id
+        else:
+            logger.error(f"Failed to create SESSION node with ID: {session_id}")
             return session_id
     
     def has_session(self, session_id: str) -> bool:
@@ -101,21 +82,10 @@ class GraphWorkflowEngine:
         Returns:
             bool: True if the session exists, False otherwise
         """
-        if not self.driver:
+        if not self.session_manager:
             return False
         
-        try:
-            with self.driver.session() as db_session:
-                result = db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    RETURN count(s) as count
-                """, session_id=session_id)
-                
-                record = result.single()
-                return record and record['count'] > 0
-        except Exception as e:
-            logger.error(f"Error checking if session exists: {str(e)}")
-            return False
+        return self.session_manager.has_session(session_id)
     
     def get_session_status(self, session_id: str) -> Dict[str, Any]:
         """
@@ -127,51 +97,10 @@ class GraphWorkflowEngine:
         Returns:
             dict: The session status information
         """
-        if not self.driver:
-            return {"error": "Neo4j driver not available"}
+        if not self.session_manager:
+            return {"error": "Session manager not available"}
         
-        try:
-            with self.driver.session() as db_session:
-                result = db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    RETURN s.status as status, s.next_steps as next_steps, 
-                           s.memory as memory, s.errors as errors,
-                           s.chat_history as chat_history
-                """, session_id=session_id)
-                
-                record = result.single()
-                if not record:
-                    return {"error": f"Session {session_id} not found"}
-                
-                # Parse JSON strings
-                try:
-                    memory_str = record['memory'] if record['memory'] else "{}"
-                    memory = json.loads(memory_str)
-                except (json.JSONDecodeError, TypeError):
-                    memory = {}
-                    
-                try:
-                    errors_str = record['errors'] if record['errors'] else "[]"
-                    errors = json.loads(errors_str)
-                except (json.JSONDecodeError, TypeError):
-                    errors = []
-                    
-                try:
-                    chat_history_str = record['chat_history'] if record['chat_history'] else "[]"
-                    chat_history = json.loads(chat_history_str)
-                except (json.JSONDecodeError, TypeError):
-                    chat_history = []
-                
-                return {
-                    "status": record['status'],
-                    "next_steps": record['next_steps'],
-                    "memory": memory,
-                    "errors": errors,
-                    "chat_history": chat_history
-                }
-        except Exception as e:
-            logger.error(f"Error getting session status: {str(e)}")
-            return {"error": str(e)}
+        return self.session_manager.get_session_status(session_id)
     
     def get_frontend_state(self, session_id: str) -> Dict[str, Any]:
         """
@@ -220,35 +149,45 @@ class GraphWorkflowEngine:
             # We have a meaningful response to show
             reply = reply_data.get('reply', '')
             
-            # Find if we have a followup question
-            followup_data = None
-            for step_id, outputs in memory.items():
-                if outputs and step_id == 'generate-followup':
-                    last_output = outputs[-1]
-                    if 'response' in last_output:
-                        followup_data = last_output
-                        break
+            # Find the variable in the get-question node input
+            var_ref = None
+            try:
+                with self.driver.session() as db_session:
+                    result = db_session.run("""
+                        MATCH (s:STEP {id: 'get-question'})
+                        RETURN s.input as input
+                    """)
+                    record = result.single()
+                    if record and record['input']:
+                        try:
+                            input_data = json.loads(record['input'])
+                            if 'query' in input_data:
+                                # Parse the conditional reference (format: @{...}|default)
+                                query = input_data['query']
+                                if '|' in query:
+                                    var_ref, default = query.split('|', 1)
+                                    var_ref = var_ref.strip()
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+            except Exception as e:
+                logger.error(f"Error getting get-question input: {str(e)}")
             
-            if followup_data:
-                followup = followup_data.get('response', '')
-                # Return both the reply and the follow-up question
-                return {
-                    "awaiting_input": True,
-                    "reply": reply,
-                    "statement": followup
-                }
+            # Just use the standard variable resolution for the follow-up question
+            statement = None
+            if var_ref:
+                try:
+                    # Use the existing variable resolution system
+                    result = resolve_variable(self.driver, session_id, var_ref)
+                    if result != var_ref:  # If it was resolved successfully
+                        statement = result
+                        logger.info(f"Resolved follow-up question: {statement}")
+                except Exception as e:
+                    logger.error(f"Error resolving follow-up question: {str(e)}")
             
-            # Find the latest request output to see what to prompt the user with
-            request_data = None
-            for step_id, outputs in memory.items():
-                if outputs and step_id.startswith('request-'):
-                    last_output = outputs[-1]
-                    if 'statement' in last_output:
-                        request_data = last_output
-            
-            # If we recently provided an answer, we should ask an open question instead
-            # of repeating the greeting message again
-            statement = "Is there anything else you'd like to know?"
+            # If we couldn't get a follow-up question, use a generic one
+            if not statement:
+                statement = "Is there anything else you'd like to know?"
+                logger.info(f"Using default follow-up question")
             
             return {
                 "awaiting_input": True,
@@ -307,31 +246,10 @@ class GraphWorkflowEngine:
         Returns:
             list: The chat history
         """
-        if not self.driver:
+        if not self.session_manager:
             return []
         
-        try:
-            with self.driver.session() as db_session:
-                result = db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    RETURN s.chat_history as chat_history
-                """, session_id=session_id)
-                
-                record = result.single()
-                if not record:
-                    return []
-                
-                # Parse chat_history JSON string
-                try:
-                    chat_history_str = record['chat_history'] if record['chat_history'] else "[]"
-                    chat_history = json.loads(chat_history_str)
-                    return chat_history
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(f"Error parsing chat history JSON for session {session_id}")
-                    return []
-        except Exception as e:
-            logger.error(f"Error getting chat history: {str(e)}")
-            return []
+        return self.session_manager.get_chat_history(session_id)
     
     def start_workflow(self, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """

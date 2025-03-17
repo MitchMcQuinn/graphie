@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphQL Playground - Graphie</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/graphql-playground-react@1.7.20/build/static/css/index.css">
+    <script src="https://cdn.jsdelivr.net/npm/graphql-playground-react@1.7.20/build/static/js/middleware.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script>
+        window.addEventListener('load', () => {
+            const root = document.getElementById('root');
+            const endpoint = `${window.location.origin}/graphql`;
+            
+            GraphQLPlayground.init(root, {
+                endpoint,
+                settings: {
+                    'general.betaUpdates': false,
+                    'editor.theme': 'dark',
+                    'editor.cursorShape': 'line',
+                    'editor.reuseHeaders': true,
+                    'tracing.hideTracingResponse': true,
+                    'editor.fontSize': 14,
+                    'editor.fontFamily': '"Source Code Pro", "Consolas", "Inconsolata", "Droid Sans Mono", "Monaco", monospace',
+                },
+                title: 'Graphie GraphQL Playground',
+                faviconUrl: '/static/favicon.ico'
+            });
+        });
+    </script>
+</body>
+</html> 

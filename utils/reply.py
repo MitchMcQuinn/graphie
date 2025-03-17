@@ -1,8 +1,8 @@
 import logging
-import re
 import json
-from utils.store_memory import store_memory
-from utils.resolve_variable import process_variables
+from utils.session_manager import get_session_manager
+from utils.resolve_variable import process_variables, resolve_variable
+from engine import get_neo4j_driver
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ def reply(session, input_data):
     Simply forwards a response to the user in the chat window
     
     Args:
-        session: The current session object to store results (legacy support)
+        session: The current session object containing session_id
         input_data: Dict containing:
             - response: The text to display to the user
             - or:
@@ -20,9 +20,25 @@ def reply(session, input_data):
     Returns:
         The reply that was sent
     """
-    # This version of reply still supports the old session dict approach
-    # while also working with the new architecture
     logger.info(f"Reply function received input_data: {input_data}")
+    
+    # Get the Neo4j driver
+    driver = get_neo4j_driver()
+    if not driver:
+        logger.error("Neo4j driver not available")
+        return {"error": "Neo4j connection unavailable"}
+    
+    # Get the session manager
+    session_manager = get_session_manager(driver)
+    if not session_manager:
+        logger.error("Session manager not available")
+        return {"error": "Session manager unavailable"}
+    
+    # Get the session_id
+    session_id = session['id']
+    
+    # First process the entire input data for any variable references
+    input_data = process_variables(driver, session_id, input_data)
     
     # Handle either 'response' or 'reply' field
     if 'response' in input_data:
@@ -31,170 +47,86 @@ def reply(session, input_data):
         reply_text = input_data.get('reply', '')
     
     # Process any variable references in the reply text
-    if isinstance(reply_text, str):
-        # If we're using the new architecture, this will already be processed
-        # But we need to keep this for backward compatibility
-        if '@{' in reply_text and 'id' in session:
-            # Check if we can access the driver for variable resolution
-            try:
-                from engine import get_neo4j_driver
-                driver = get_neo4j_driver()
-                if driver:
-                    # Handle SESSION_ID special variable
-                    if 'SESSION_ID' in reply_text:
-                        reply_text = reply_text.replace('SESSION_ID', session['id'])
-                    
-                    # Special handling for generate-answer.response
-                    if '.generate-answer.response' in reply_text:
-                        try:
-                            with driver.session() as db_session:
-                                result = db_session.run("""
-                                    MATCH (s:SESSION {id: $session_id})
-                                    RETURN s.memory as memory
-                                """, session_id=session['id'])
-                                
-                                record = result.single()
-                                if record and record['memory']:
-                                    memory = json.loads(record['memory'])
-                                    # Look for response in generate-answer
-                                    if 'generate-answer' in memory and memory['generate-answer']:
-                                        for output in reversed(memory['generate-answer']):
-                                            if 'response' in output and isinstance(output['response'], str) and len(output['response']) > 20:
-                                                reply_text = output['response']
-                                                logger.info(f"Resolved generate-answer.response to: {reply_text[:50]}...")
-                                                break
-                        except Exception as e:
-                            logger.error(f"Error resolving generate-answer.response: {str(e)}")
-                    
-                    # Use the new variable resolution for other variables
-                    else:
-                        reply_text = process_variables(driver, session['id'], reply_text)
-            except (ImportError, AttributeError):
-                # Fall back to legacy variable resolution
-                pass
-                
-        # Legacy variable resolution (kept for backward compatibility)
-        if '@{' in reply_text:
-            # Check for variable references like @{step-id}.propertyname|defaultvalue
-            var_pattern = re.compile(r'@\{([^}]+)\}')
-            matches = var_pattern.findall(reply_text)
+    # This is a second check to make sure any nested variables are resolved
+    if isinstance(reply_text, str) and '@{' in reply_text:
+        # Handle SESSION_ID special case first
+        if 'SESSION_ID' in reply_text:
+            reply_text = reply_text.replace('SESSION_ID', session_id)
+            logger.info(f"Replaced SESSION_ID in reply_text: {reply_text}")
+        
+        # Process variable references
+        resolved_text = process_variables(driver, session_id, reply_text)
+        
+        # Check if resolution was successful
+        if resolved_text != reply_text:
+            logger.info(f"Successfully resolved variables: {reply_text} -> {resolved_text}")
+            reply_text = resolved_text
+        else:
+            logger.warning(f"Failed to resolve variables in: {reply_text}")
             
-            if matches:
-                for match in matches:
-                    # Get the variable reference and any default value
-                    parts = match.split('|', 1)
-                    var_ref = parts[0].strip()
-                    default_value = parts[1].strip() if len(parts) > 1 else ""
-                    
-                    # Parse step-id and property name if it's in the format step-id.propertyname
-                    if '.' in var_ref:
-                        step_id, prop_name = var_ref.split('.', 1)
-                        
-                        # Check if step data exists in session
-                        if step_id in session and prop_name in session[step_id]:
-                            var_value = session[step_id][prop_name]
-                            logger.info(f"Resolved variable @{{{var_ref}}} to: {var_value}")
-                            reply_text = reply_text.replace(f"@{{{match}}}", str(var_value))
-                        # Handle special case for nested properties like "generation.response"
-                        elif step_id in session and "generation" in session[step_id] and "." in prop_name:
-                            nested_props = prop_name.split(".")
-                            if len(nested_props) == 2 and nested_props[0] in session[step_id] and nested_props[1] in session[step_id][nested_props[0]]:
-                                var_value = session[step_id][nested_props[0]][nested_props[1]]
-                                logger.info(f"Resolved nested variable @{{{var_ref}}} to: {var_value}")
-                                reply_text = reply_text.replace(f"@{{{match}}}", str(var_value))
-                            else:
-                                logger.warning(f"Nested property @{{{var_ref}}} not found in session, using default")
-                                reply_text = reply_text.replace(f"@{{{match}}}", default_value)
-                        else:
-                            logger.warning(f"Step property @{{{var_ref}}} not found in session, using default")
-                            reply_text = reply_text.replace(f"@{{{match}}}", default_value)
-                    else:
-                        # Handle direct session variable reference (legacy support)
-                        if var_ref in session:
-                            var_value = session[var_ref]
-                            logger.info(f"Resolved direct variable @{{{var_ref}}} to: {var_value}")
-                            reply_text = reply_text.replace(f"@{{{match}}}", str(var_value))
-                        else:
-                            logger.warning(f"Direct variable @{{{var_ref}}} not found in session, using default")
-                            reply_text = reply_text.replace(f"@{{{match}}}", default_value)
-                
-                logger.info(f"Reply text after variable substitution: {reply_text}")
+            # Try direct resolution as a fallback
+            # This is helpful for cases like @{SESSION_ID}.step_id.key
+            if reply_text.startswith('@{') and reply_text.endswith('}'):
+                # Try direct resolution since it's a complete variable reference
+                direct_result = resolve_variable(driver, session_id, reply_text)
+                if direct_result != reply_text:
+                    logger.info(f"Direct resolution successful: {reply_text} -> {direct_result}")
+                    reply_text = direct_result
     
     # If the reply is empty, provide a fallback
     if not reply_text or reply_text.startswith('.'):
         reply_text = "I'm sorry, I wasn't able to generate a proper response. Could you please try again?"
         logger.warning("Empty or invalid reply text, using fallback message")
     
+    # Final check for unresolved variables, just in case
+    if isinstance(reply_text, str) and '@{' in reply_text:
+        logger.warning(f"Still have unresolved variables in: {reply_text}")
+        
+        # Try manual extraction and resolution as a last resort
+        if reply_text.startswith('@{') and '}' in reply_text:
+            # Extract the variable parts manually
+            var_content = reply_text.split('@{')[1].split('}')[0]
+            logger.info(f"Extracted variable content: {var_content}")
+            
+            parts = var_content.split('.')
+            if len(parts) >= 3:
+                # Format: session_id.step_id.key
+                target_session_id = parts[0]
+                step_id = parts[1]
+                key = parts[2]
+                
+                # Access memory directly
+                try:
+                    memory = session_manager.get_memory(target_session_id)
+                    if step_id in memory and memory[step_id] and len(memory[step_id]) > 0:
+                        latest_output = memory[step_id][-1]
+                        if key in latest_output:
+                            value = latest_output[key]
+                            logger.info(f"Manual resolution successful: {reply_text} -> {value}")
+                            reply_text = value
+                except Exception as e:
+                    logger.error(f"Manual resolution failed: {str(e)}")
+    
     logger.info(f"Final reply text: {reply_text}")
     
-    # Store this reply in the session
-    # For the new architecture, store in SESSION node memory
+    # Get the current step ID for proper storage
+    current_step_id = "unknown"
     try:
-        from engine import get_neo4j_driver
-        driver = get_neo4j_driver()
-        if driver and 'id' in session:
-            # Use the new store_memory function
-            store_memory(driver, session['id'], f"reply-{session.get('current_step', {}).get('id', 'unknown')}", {'reply': reply_text})
-    except (ImportError, AttributeError):
-        # Fall back to legacy storage
-        pass
+        status = session_manager.get_session_status(session_id)
+        if 'next_steps' in status and status['next_steps'] and len(status['next_steps']) > 0:
+            current_step_id = status['next_steps'][0]
+    except Exception as e:
+        logger.warning(f"Failed to get current step ID: {str(e)}")
     
-    # For backward compatibility, still set these values
-    session['last_reply'] = reply_text
-    logger.info(f"Set session last_reply to: {reply_text}")
+    # Store this reply in the session memory
+    step_id = f"reply-{current_step_id}"
+    session_manager.store_memory(session_id, step_id, {'reply': reply_text})
+    
+    # Add the reply to chat history
+    session_manager.add_assistant_message(session_id, reply_text)
     
     # Make sure we're not waiting for input from the user
-    # This is critical to ensure the workflow continues
-    session['awaiting_input'] = False
-    
-    # Store a formatted message for the chat history
-    if 'chat_history' not in session:
-        session['chat_history'] = []
-        
-    session['chat_history'].append({
-        'role': 'assistant',
-        'content': reply_text
-    })
-    
-    # Store chat history in SESSION node for new architecture
-    try:
-        from engine import get_neo4j_driver
-        driver = get_neo4j_driver()
-        if driver and 'id' in session:
-            with driver.session() as db_session:
-                # First, get the current chat history
-                result = db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    RETURN s.chat_history as chat_history
-                """, session_id=session['id'])
-                
-                record = result.single()
-                
-                # Parse existing chat history or create a new one
-                try:
-                    if record and record['chat_history']:
-                        chat_history = json.loads(record['chat_history'])
-                    else:
-                        chat_history = []
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(f"Invalid chat history JSON for session {session['id']}, resetting")
-                    chat_history = []
-                
-                # Add the new message
-                chat_history.append({
-                    'role': 'assistant',
-                    'content': reply_text
-                })
-                
-                # Update the SESSION node with the new chat history
-                db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    SET s.chat_history = $chat_history
-                """, session_id=session['id'], chat_history=json.dumps(chat_history))
-                
-                logger.info(f"Updated chat history for session {session['id']}")
-    except (ImportError, AttributeError, Exception) as e:
-        logger.error(f"Error updating chat history in SESSION node: {str(e)}")
+    session_manager.set_session_status(session_id, 'active')
     
     return {
         'reply': reply_text
@@ -206,11 +138,10 @@ def respond(session, input_data):
     Alias for the reply function to match the Neo4j workflow
     
     Args:
-        session: The current session object to store results
-        input_data: Dict containing:
-            - response: The text to send to the user
-    
+        session: The current session object
+        input_data: The input data to process
+        
     Returns:
-        The response that was sent
+        The reply that was sent
     """
     return reply(session, input_data)

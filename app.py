@@ -7,6 +7,7 @@ from flask_socketio import SocketIO
 from dotenv import load_dotenv
 from engine import get_workflow_engine, has_session
 from graph_engine import get_graph_workflow_engine
+from graphql_api import add_graphql_route
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -22,8 +23,11 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key')
 # Initialize SocketIO
 socketio = SocketIO(app)
 
-# Get the new graph workflow engine
+# Get the graph workflow engine
 workflow_engine = get_graph_workflow_engine()
+
+# Add GraphQL endpoint
+add_graphql_route(app)
 
 @app.route('/')
 def index():
@@ -147,6 +151,11 @@ def chat_history():
     session_id = session['id']
     history = workflow_engine.get_chat_history(session_id)
     return jsonify(history)
+
+@app.route('/graphql-playground')
+def graphql_playground():
+    """Render the GraphQL Playground UI"""
+    return render_template('graphql_playground.html')
 
 if __name__ == '__main__':
     app.run(debug=True)

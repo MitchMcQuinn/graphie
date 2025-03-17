@@ -1,7 +1,8 @@
 import logging
-from utils.store_memory import store_memory
-from utils.resolve_variable import process_variables
 import json
+from utils.session_manager import get_session_manager
+from utils.resolve_variable import process_variables
+from engine import get_neo4j_driver
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ def request(session, input_data):
     and API endpoints to pause processing until user input is received.
     
     Args:
-        session: The current session object to store results (legacy support)
+        session: The current session object containing session_id
         input_data: Dict containing:
             - statement: The question or statement to ask the user
             - query: Alternative name for statement
@@ -24,119 +25,54 @@ def request(session, input_data):
     Returns:
         A dict with status 'waiting_for_input' indicating a request has been initiated
     """
+    # Get the Neo4j driver
+    driver = get_neo4j_driver()
+    if not driver:
+        logger.error("Neo4j driver not available")
+        return {"error": "Neo4j connection unavailable"}
+    
+    # Get the session manager
+    session_manager = get_session_manager(driver)
+    if not session_manager:
+        logger.error("Session manager not available")
+        return {"error": "Session manager unavailable"}
+    
+    # Get the session ID
+    session_id = session['id']
+    
     # Extract the statement to show to the user
     # Support both 'statement' and 'query' parameter names
     statement = input_data.get('statement', input_data.get('query', 'What would you like to know?'))
     
     # Process any variable references in the statement
-    if isinstance(statement, str) and '@{' in statement and 'id' in session:
-        try:
-            from engine import get_neo4j_driver
-            driver = get_neo4j_driver()
-            if driver:
-                # Use the new variable resolution
-                statement = process_variables(driver, session['id'], statement)
-        except (ImportError, AttributeError):
-            # Fall back to legacy variable resolution
-            pass
+    if isinstance(statement, str) and '@{' in statement:
+        statement = process_variables(driver, session_id, statement)
     
-    # Get the current step ID, using proper naming for Neo4j
-    # This is crucial for the workflow to find the data in the correct place
+    # Get the current step ID for proper storage
     current_step_id = "unknown"
-    if 'current_step' in session and isinstance(session['current_step'], dict):
-        current_step_id = session['current_step'].get('id', 'unknown')
-    elif session.get('id', None):
-        # For the new architecture, session['id'] refers to the session ID
-        # We need to identify if we can extract the step ID from session data
-        try:
-            from engine import get_neo4j_driver
-            driver = get_neo4j_driver()
-            if driver and 'id' in session:
-                with driver.session() as db_session:
-                    result = db_session.run("""
-                        MATCH (s:SESSION {id: $session_id})
-                        RETURN s.next_steps as next_steps
-                    """, session_id=session['id'])
-                    record = result.single()
-                    if record and record['next_steps'] and len(record['next_steps']) > 0:
-                        # The first item in next_steps should be the current step
-                        current_step_id = record['next_steps'][0]
-        except Exception as e:
-            logger.warning(f"Failed to get current step ID from Neo4j: {str(e)}")
+    try:
+        status = session_manager.get_session_status(session_id)
+        if 'next_steps' in status and status['next_steps'] and len(status['next_steps']) > 0:
+            current_step_id = status['next_steps'][0]
+    except Exception as e:
+        logger.warning(f"Failed to get current step ID: {str(e)}")
     
     logger.info(f"Using step ID: {current_step_id} for request storage")
     
-    # Store this statement in the SESSION node memory
-    try:
-        from engine import get_neo4j_driver
-        driver = get_neo4j_driver()
-        if driver and 'id' in session:
-            # Store under both the request-stepId and the direct stepId
-            # This ensures compatibility with how subsequent steps expect to find the data
-            step_id_request = f"request-{current_step_id}"
-            store_memory(driver, session['id'], step_id_request, {'statement': statement})
-            
-            # Also store directly under the step ID for reference variable compatibility
-            store_memory(driver, session['id'], current_step_id, {'response': statement})
-            
-            # Update session status to awaiting_input
-            with driver.session() as db_session:
-                db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    SET s.status = 'awaiting_input'
-                """, session_id=session['id'])
-    except (ImportError, AttributeError, Exception) as e:
-        logger.error(f"Error storing request in SESSION node: {str(e)}")
+    # Store the statement in session memory
+    step_id_request = f"request-{current_step_id}"
+    session_manager.store_memory(session_id, step_id_request, {'statement': statement})
     
-    # For backward compatibility with the old session approach
-    session['request_statement'] = statement
-    session['awaiting_input'] = True
+    # Also store directly under the step ID for reference variable compatibility
+    session_manager.store_memory(session_id, current_step_id, {'response': statement})
     
-    # Store a formatted message for the chat history
-    if 'chat_history' not in session:
-        session['chat_history'] = []
-        
-    session['chat_history'].append({
-        'role': 'assistant',
-        'content': statement
-    })
+    # Set the session status to awaiting input
+    session_manager.set_session_status(session_id, 'awaiting_input')
     
-    # Store chat history in SESSION node for new architecture
-    try:
-        from engine import get_neo4j_driver
-        driver = get_neo4j_driver()
-        if driver and 'id' in session:
-            with driver.session() as db_session:
-                # Get current chat history
-                result = db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    RETURN s.chat_history as chat_history
-                """, session_id=session['id'])
-                
-                record = result.single()
-                if record:
-                    try:
-                        # Parse current chat history
-                        chat_history_str = record['chat_history'] if record['chat_history'] else "[]"
-                        chat_history = json.loads(chat_history_str)
-                        
-                        # Add new message
-                        chat_history.append({
-                            'role': 'assistant',
-                            'content': statement
-                        })
-                        
-                        # Update chat history
-                        db_session.run("""
-                            MATCH (s:SESSION {id: $session_id})
-                            SET s.chat_history = $chat_history
-                        """, session_id=session['id'], chat_history=json.dumps(chat_history))
-                        
-                        logger.info(f"Updated chat history for session {session['id']}")
-                    except Exception as e:
-                        logger.error(f"Error parsing chat history: {str(e)}")
-    except (ImportError, AttributeError, Exception) as e:
-        logger.error(f"Error updating chat history in SESSION node: {str(e)}")
+    # Add the statement to chat history
+    session_manager.add_assistant_message(session_id, statement)
+    
+    logger.info(f"Request function completed for session {session_id}, statement: {statement}")
     
     # Return a flag indicating we're waiting for user input
     return {
@@ -149,84 +85,57 @@ def handle_user_response(session, user_response):
     Handle the user's response to a request
     
     Args:
-        session: The current session object
+        session: The current session object containing session_id
         user_response: The user's response text
         
     Returns:
-        None, but updates the session
+        Dict with status 'input_received'
     """
-    # Store the user's response in the session
-    session['response'] = user_response
+    # Get the Neo4j driver
+    driver = get_neo4j_driver()
+    if not driver:
+        logger.error("Neo4j driver not available")
+        return {"error": "Neo4j connection unavailable"}
     
-    # Mark the session as no longer awaiting input
-    session['awaiting_input'] = False
+    # Get the session manager
+    session_manager = get_session_manager(driver)
+    if not session_manager:
+        logger.error("Session manager not available")
+        return {"error": "Session manager unavailable"}
+    
+    # Get the session ID
+    session_id = session['id']
     
     # Get the current step ID for proper storage
     current_step_id = "unknown"
-    if 'current_step' in session and isinstance(session['current_step'], dict):
-        current_step_id = session['current_step'].get('id', 'unknown')
-    elif session.get('id', None):
-        # For the new architecture, try to identify the current step
-        try:
-            from engine import get_neo4j_driver
-            driver = get_neo4j_driver()
-            if driver and 'id' in session:
-                with driver.session() as db_session:
-                    result = db_session.run("""
-                        MATCH (s:SESSION {id: $session_id})
-                        RETURN s.next_steps as next_steps
-                    """, session_id=session['id'])
-                    record = result.single()
-                    if record and record['next_steps'] and len(record['next_steps']) > 0:
-                        current_step_id = record['next_steps'][0]
-        except Exception as e:
-            logger.warning(f"Failed to get current step ID from Neo4j: {str(e)}")
-    
-    # If this is a follow-up to a question, store the question-answer pair for context
-    if 'request_statement' in session:
-        question = session.get('request_statement', '')
-        
-        # Track conversation context
-        if 'conversation_context' not in session:
-            session['conversation_context'] = []
-            
-        # Add the question-answer pair to context
-        session['conversation_context'].append({
-            'question': question,
-            'answer': user_response
-        })
-        
-        # Log that we're preserving context
-        logger.info(f"Storing Q&A context: Question: '{question[:50]}...', Answer: '{user_response}'")
-    
-    # Store in SESSION node for the new architecture
     try:
-        from engine import get_neo4j_driver
-        driver = get_neo4j_driver()
-        if driver and 'id' in session:
-            # Store under both response-stepId and directly in stepId for variable compatibility
-            step_id_response = f"response-{current_step_id}"
-            store_memory(driver, session['id'], step_id_response, {'response': user_response})
-            
-            # Also store directly under the step ID for reference variable compatibility
-            store_memory(driver, session['id'], current_step_id, {'response': user_response})
-            
-            # Update session status to active
-            with driver.session() as db_session:
-                db_session.run("""
-                    MATCH (s:SESSION {id: $session_id})
-                    SET s.status = 'active'
-                """, session_id=session['id'])
-            
-            # Process the next steps
-            # This is needed to ensure the workflow continues after handling input
-            try:
-                from graph_engine import get_graph_workflow_engine
-                engine = get_graph_workflow_engine()
-                engine.process_workflow_steps(session['id'])
-            except (ImportError, AttributeError, Exception) as e:
-                logger.error(f"Error continuing workflow after user response: {str(e)}")
-    except (ImportError, AttributeError, Exception) as e:
-        logger.error(f"Error storing response in SESSION node: {str(e)}")
+        status = session_manager.get_session_status(session_id)
+        if 'next_steps' in status and status['next_steps'] and len(status['next_steps']) > 0:
+            current_step_id = status['next_steps'][0]
+    except Exception as e:
+        logger.warning(f"Failed to get current step ID: {str(e)}")
+    
+    logger.info(f"Handling user response for session {session_id}, step: {current_step_id}")
+    
+    # Store the user's response in session memory
+    step_id_response = f"response-{current_step_id}"
+    session_manager.store_memory(session_id, step_id_response, {'response': user_response})
+    
+    # Also store directly under the step ID for reference variable compatibility
+    session_manager.store_memory(session_id, current_step_id, {'response': user_response})
+    
+    # Add the user's response to chat history
+    session_manager.add_user_message(session_id, user_response)
+    
+    # Set the session status to active
+    session_manager.set_session_status(session_id, 'active')
+    
+    # Try to continue the workflow automatically
+    try:
+        from graph_engine import get_graph_workflow_engine
+        engine = get_graph_workflow_engine()
+        engine.process_workflow_steps(session_id)
+    except Exception as e:
+        logger.error(f"Error continuing workflow after user response: {str(e)}")
     
     return {'status': 'input_received'}
