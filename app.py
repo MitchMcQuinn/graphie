@@ -1,10 +1,12 @@
 import os
 import json
 import logging
+import uuid
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
-from engine import get_workflow_engine
+from engine import get_workflow_engine, has_session
+from graph_engine import get_graph_workflow_engine
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -20,65 +22,42 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-secret-key')
 # Initialize SocketIO
 socketio = SocketIO(app)
 
-# Get the workflow engine
-workflow_engine = get_workflow_engine()
+# Get the new graph workflow engine
+workflow_engine = get_graph_workflow_engine()
 
 @app.route('/')
 def index():
     """Render the chat interface"""
-    # Clear any existing session data
+    # Generate a new session ID and store it in Flask session
     session.clear()
+    session['id'] = str(uuid.uuid4())
+    logger.info(f"Created new session with ID: {session['id']}")
     return render_template('index.html')
 
 @app.route('/start_chat', methods=['POST'])
 def start_chat():
     """Start a new chat session"""
     try:
-        # Initialize session data
-        session.clear()  # Clear entire session to start fresh
-        session['chat_history'] = []
-        session['has_pending_steps'] = False
+        # Make sure we have a session ID
+        if 'id' not in session:
+            session['id'] = str(uuid.uuid4())
+            logger.info(f"Created new session ID: {session['id']}")
         
-        # Start the workflow
-        workflow_engine.start_workflow(session)
+        session_id = session['id']
+        logger.info(f"Starting chat with session ID: {session_id}")
         
-        # Process the first step of the workflow
-        try:
-            result = workflow_engine.process_current_step()
-            
-            # If we're waiting for input, send the request statement
-            if session.get('awaiting_input', False):
-                # Reset since we're waiting for user input
-                session['has_pending_steps'] = False
-                return jsonify({
-                    'awaiting_input': True,
-                    'statement': session.get('request_statement', 'What would you like to know?')
-                })
-            
-            # If we have a reply to show from this step, send it with a flag indicating more steps
-            if 'last_reply' in session:
-                more_steps = workflow_engine.current_step is not None
-                session['has_pending_steps'] = more_steps
-                return jsonify({
-                    'awaiting_input': False,
-                    'reply': session.get('last_reply', ''),
-                    'has_pending_steps': more_steps
-                })
-                
-            # Continue processing steps until we need user input, find a reply, or complete
-            return continue_processing()
-                
-        except Exception as e:
-            logger.error(f"Error processing workflow step: {str(e)}")
-            session['has_pending_steps'] = False  # Reset on error
-            return jsonify({
-                'awaiting_input': False,
-                'error': True,
-                'reply': f"There was an error processing the workflow: {str(e)}"
-            })
+        # Start a new workflow with this session ID
+        # This will create the session if it doesn't exist
+        result = workflow_engine.start_workflow(session_id)
+        logger.info(f"Workflow start result: {result}")
+        
+        # Get the current state from the engine
+        frontend_state = workflow_engine.get_frontend_state(session_id)
+        logger.info(f"Frontend state: {frontend_state}")
+        
+        return jsonify(frontend_state)
     except Exception as e:
         logger.error(f"Error starting chat: {str(e)}", exc_info=True)
-        session['has_pending_steps'] = False  # Reset on error
         return jsonify({
             'awaiting_input': False,
             'error': True,
@@ -87,73 +66,34 @@ def start_chat():
 
 @app.route('/continue_processing', methods=['POST'])
 def continue_processing():
-    """Continue processing the workflow after sending a reply to the frontend"""
+    """Process the next steps in the workflow"""
     try:
-        # Reset the last_reply so we don't keep returning the same one
-        if 'last_reply' in session:
-            prev_reply = session.pop('last_reply')
-            logger.info(f"Cleared previous reply: {prev_reply[:50]}...")
+        # Make sure we have a session ID
+        if 'id' not in session:
+            logger.error("No session ID found in /continue_processing")
+            return jsonify({
+                'awaiting_input': False,
+                'error': True,
+                'reply': "Session not found. Please refresh the page."
+            })
         
-        # Process workflow steps until we need user input, find a reply to show, or complete
-        while True:
-            try:
-                # If no current step or workflow completed, break
-                if not workflow_engine.current_step:
-                    session['has_pending_steps'] = False
-                    return jsonify({
-                        'awaiting_input': False,
-                        'reply': 'Workflow processing complete.',
-                        'has_pending_steps': False
-                    })
-                    
-                # Process the next step
-                result = workflow_engine.process_current_step()
-                
-                # If we're waiting for input, send the request statement
-                if session.get('awaiting_input', False):
-                    session['has_pending_steps'] = False  # Reset since we're waiting for user input
-                    return jsonify({
-                        'awaiting_input': True,
-                        'statement': session.get('request_statement', 'What would you like to know?')
-                    })
-                
-                # If we have a reply to show, send it with a flag indicating more steps
-                if 'last_reply' in session:
-                    more_steps = workflow_engine.current_step is not None
-                    session['has_pending_steps'] = more_steps
-                    return jsonify({
-                        'awaiting_input': False,
-                        'reply': session.get('last_reply', ''),
-                        'has_pending_steps': more_steps
-                    })
-                
-                # If the workflow is complete or result is None, break
-                if result is None or not workflow_engine.current_step:
-                    session['has_pending_steps'] = False
-                    if 'error' in session:
-                        return jsonify({
-                            'awaiting_input': False,
-                            'error': True,
-                            'reply': session.get('error', 'An unknown error occurred'),
-                            'has_pending_steps': False
-                        })
-                    else:
-                        return jsonify({
-                            'awaiting_input': False,
-                            'reply': 'Workflow processing complete.',
-                            'has_pending_steps': False
-                        })
-            except Exception as e:
-                logger.error(f"Error processing workflow step: {str(e)}")
-                session['has_pending_steps'] = False  # Reset on error
-                return jsonify({
-                    'awaiting_input': False,
-                    'error': True,
-                    'reply': f"There was an error processing the workflow: {str(e)}"
-                })
+        session_id = session['id']
+        
+        # Check if this session exists in the engine
+        if not workflow_engine.has_session(session_id):
+            logger.warning(f"Session {session_id} not found in engine, initializing new workflow")
+            workflow_engine.start_workflow(session_id)
+            return jsonify(workflow_engine.get_frontend_state(session_id))
+        
+        logger.info(f"Continuing processing for session {session_id}")
+        
+        # Let the engine process next steps
+        workflow_engine.process_workflow_steps(session_id)
+        
+        # Get the current state from the engine
+        return jsonify(workflow_engine.get_frontend_state(session_id))
     except Exception as e:
-        logger.error(f"Error continuing workflow: {str(e)}", exc_info=True)
-        session['has_pending_steps'] = False  # Reset on error
+        logger.error(f"Error in continue_processing: {str(e)}", exc_info=True)
         return jsonify({
             'awaiting_input': False,
             'error': True,
@@ -168,76 +108,30 @@ def send_message():
         data = request.json
         message = data.get('message', '')
         
-        # Add the message to the chat history
-        if 'chat_history' not in session:
-            session['chat_history'] = []
+        # Get or create session ID
+        if 'id' not in session:
+            session['id'] = str(uuid.uuid4())
+            logger.info(f"Created new session ID: {session['id']}")
         
-        session['chat_history'].append({
-            'role': 'user',
-            'content': message
-        })
+        session_id = session['id']
+        logger.info(f"Received message '{message}' for session {session_id}")
         
-        # Check if the workflow is already complete (no current step)
-        if not workflow_engine.current_step:
-            logger.info("Workflow already completed, sending end-of-session message")
-            
-            # Set a response for completed workflow
-            session['last_reply'] = "We've reached the end of our session. Please refresh to start again."
-            
-            # Add the response to chat history
-            session['chat_history'].append({
-                'role': 'assistant',
-                'content': session['last_reply']
-            })
-            
-            return jsonify({
-                'awaiting_input': False,
-                'reply': session['last_reply'],
-                'has_pending_steps': False
-            })
+        # Check if this session exists in the engine
+        if not workflow_engine.has_session(session_id):
+            logger.warning(f"Session {session_id} not found in engine, initializing new workflow")
+            workflow_engine.start_workflow(session_id)
         
-        # Reset has_pending_steps flag when processing new user input
-        # This ensures we properly handle the new input rather than continuing old steps
-        session['has_pending_steps'] = False
+        # Continue the workflow with the user's message
+        result = workflow_engine.continue_workflow(message, session_id)
+        logger.info(f"Continue workflow result: {result}")
         
-        # Continue the workflow with the user's input
-        workflow_engine.continue_workflow(message)
+        # Get the current state from the engine
+        frontend_state = workflow_engine.get_frontend_state(session_id)
+        logger.info(f"Frontend state: {frontend_state}")
         
-        # Process the next step
-        try:
-            result = workflow_engine.process_current_step()
-            
-            # If we're waiting for input, send the request statement
-            if session.get('awaiting_input', False):
-                return jsonify({
-                    'awaiting_input': True,
-                    'statement': session.get('request_statement', 'What would you like to know?')
-                })
-            
-            # If we have a reply to show, send it with a flag indicating more steps
-            if 'last_reply' in session:
-                more_steps = workflow_engine.current_step is not None
-                session['has_pending_steps'] = more_steps
-                response_data = {
-                    'awaiting_input': False,
-                    'reply': session.get('last_reply', ''),
-                    'has_pending_steps': more_steps
-                }
-                logger.info(f"Returning response with reply and has_pending_steps={more_steps}")
-                return jsonify(response_data)
-            
-            # Continue processing remaining steps
-            return continue_processing()
-                
-        except Exception as e:
-            logger.error(f"Error processing workflow step: {str(e)}")
-            return jsonify({
-                'awaiting_input': False,
-                'error': True,
-                'reply': f"There was an error processing the workflow: {str(e)}"
-            })
+        return jsonify(frontend_state)
     except Exception as e:
-        logger.error(f"Error sending message: {str(e)}", exc_info=True)
+        logger.error(f"Error processing message: {str(e)}", exc_info=True)
         return jsonify({
             'awaiting_input': False,
             'error': True,
@@ -247,7 +141,11 @@ def send_message():
 @app.route('/chat_history')
 def chat_history():
     """Get the chat history"""
-    history = session.get('chat_history', [])
+    if 'id' not in session:
+        return jsonify([])
+    
+    session_id = session['id']
+    history = workflow_engine.get_chat_history(session_id)
     return jsonify(history)
 
 if __name__ == '__main__':
