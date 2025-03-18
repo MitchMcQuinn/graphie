@@ -1,0 +1,96 @@
+"""
+GraphQL Schema for Graphie Workflow Engine
+------------------------------------------
+This schema defines the types and operations for interacting with
+the workflow engine via GraphQL.
+"""
+
+type Query {
+  """Get frontend state for a session"""
+  frontendState(sessionId: ID!): FrontendState!
+  
+  """Get chat history for a session"""
+  chatHistory(sessionId: ID!): [ChatMessage!]!
+  
+  """Check if a session exists"""
+  hasSession(sessionId: ID!): Boolean!
+  
+  """Get session status"""
+  sessionStatus(sessionId: ID!): SessionStatus!
+}
+
+type Mutation {
+  """Start a new workflow"""
+  startWorkflow(sessionId: ID): WorkflowResult!
+  
+  """Send a message to continue the workflow"""
+  sendMessage(sessionId: ID!, message: String!): WorkflowResult!
+  
+  """Continue processing the workflow (polling)"""
+  continueProcessing(sessionId: ID!): WorkflowResult!
+}
+
+type FrontendState {
+  """Whether the UI should show an input field"""
+  awaitingInput: Boolean!
+  
+  """The reply from the system to show"""
+  reply: String
+  
+  """The statement/question to show when awaiting input"""
+  statement: String
+  
+  """Whether there are pending steps to process"""
+  hasPendingSteps: Boolean
+  
+  """Any structured data to pass to the frontend"""
+  structuredData: JSON
+  
+  """Whether an error occurred"""
+  error: Boolean
+}
+
+type WorkflowResult {
+  """The updated frontend state"""
+  frontendState: FrontendState!
+  
+  """Whether the operation was successful"""
+  success: Boolean!
+  
+  """Optional error message"""
+  errorMessage: String
+  
+  """Whether there are more steps to process"""
+  hasMoreSteps: Boolean
+  
+  """The workflow status (active, completed, awaiting_input)"""
+  status: String
+}
+
+type ChatMessage {
+  """The role of the message sender (user or assistant)"""
+  role: String!
+  
+  """The message content"""
+  content: String!
+}
+
+type SessionStatus {
+  """The current status of the session"""
+  status: String!
+  
+  """The next steps to process"""
+  nextSteps: [String!]!
+  
+  """Whether an error has occurred"""
+  hasError: Boolean!
+  
+  """The error message if any"""
+  errorMessage: String
+  
+  """Whether the session has chat history"""
+  hasChatHistory: Boolean!
+}
+
+"""Custom scalar for JSON data"""
+scalar JSON 

@@ -197,6 +197,47 @@
         .retry-button:hover {
             background-color: #3a6d82;
         }
+        
+        .structured-data-section {
+            margin-top: 10px;
+            border-top: 1px solid #e0e0e0;
+            padding-top: 8px;
+        }
+        
+        .toggle-structured-data {
+            background-color: #f0f0f0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            color: #666;
+            margin-bottom: 8px;
+            transition: background-color 0.2s;
+        }
+        
+        .toggle-structured-data:hover {
+            background-color: #e5e5e5;
+            color: #333;
+        }
+        
+        .structured-data-container {
+            background-color: #f8f8f8;
+            border: 1px solid #eee;
+            border-radius: 4px;
+            padding: 8px;
+            margin-top: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .structured-data-container pre {
+            margin: 0;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            color: #333;
+        }
     </style>
 </head>
 <body>
@@ -251,7 +292,7 @@
             }
             
             // Add a message to the chat
-            function addMessage(content, isUser = false, isError = false) {
+            function addMessage(content, isUser = false, isError = false, structuredData = null) {
                 const messageDiv = document.createElement('div');
                 messageDiv.classList.add('message');
                 messageDiv.classList.add(isUser ? 'user-message' : 'bot-message');
@@ -260,7 +301,52 @@
                     messageDiv.classList.add('error-message');
                 }
                 
-                messageDiv.textContent = content;
+                // If we have structured data, display the content as the main message
+                // and then add the structured data in a formatted section
+                if (structuredData && typeof structuredData === 'object') {
+                    // First add the main message content (usually the 'response' field)
+                    const contentDiv = document.createElement('div');
+                    contentDiv.textContent = content;
+                    messageDiv.appendChild(contentDiv);
+                    
+                    // Check if there's more than just a response field
+                    const hasAdditionalData = Object.keys(structuredData).filter(key => key !== 'response' && key !== 'error').length > 0;
+                    
+                    // Add structured data in a collapsible section if there's additional data
+                    if (hasAdditionalData) {
+                        const structuredSection = document.createElement('div');
+                        structuredSection.classList.add('structured-data-section');
+                        
+                        // Add a button to toggle visibility of the structured data
+                        const toggleButton = document.createElement('button');
+                        toggleButton.classList.add('toggle-structured-data');
+                        toggleButton.textContent = 'Show detailed data';
+                        structuredSection.appendChild(toggleButton);
+                        
+                        // Create a container for the structured data
+                        const dataContainer = document.createElement('div');
+                        dataContainer.classList.add('structured-data-container');
+                        dataContainer.style.display = 'none';  // Initially hidden
+                        
+                        // Format the structured data as JSON
+                        const formattedData = document.createElement('pre');
+                        formattedData.textContent = JSON.stringify(structuredData, null, 2);
+                        dataContainer.appendChild(formattedData);
+                        
+                        structuredSection.appendChild(dataContainer);
+                        messageDiv.appendChild(structuredSection);
+                        
+                        // Add click event to toggle button
+                        toggleButton.addEventListener('click', function() {
+                            const isHidden = dataContainer.style.display === 'none';
+                            dataContainer.style.display = isHidden ? 'block' : 'none';
+                            toggleButton.textContent = isHidden ? 'Hide detailed data' : 'Show detailed data';
+                        });
+                    }
+                } else {
+                    // Regular text message
+                    messageDiv.textContent = content;
+                }
                 
                 const timeDiv = document.createElement('div');
                 timeDiv.classList.add('message-time');
@@ -311,7 +397,17 @@
                         sendButton.disabled = false;
                         chatInput.focus();
                     } else if (data.awaiting_input) {
-                        addMessage(data.statement);
+                        // Handle both reply and statement if both are provided
+                        if (data.reply) {
+                            addMessage(data.reply);
+                            // Add a small delay before adding the follow-up question
+                            setTimeout(() => {
+                                addMessage(data.statement);
+                            }, 300);
+                        } else {
+                            addMessage(data.statement);
+                        }
+                        
                         // Re-enable input when waiting for user
                         chatInput.disabled = false;
                         sendButton.disabled = false;
@@ -322,24 +418,25 @@
                         // Check if we need to continue processing more steps
                         if (data.has_pending_steps) {
                             // Set a small delay before continuing to allow the UI to update
-                            setTimeout(processPendingSteps, 500);
-                        } else {
-                            // Re-enable input when all processing is complete
-                            chatInput.disabled = false;
-                            sendButton.disabled = false;
-                            chatInput.focus();
+                            setTimeout(processPendingSteps, 300);
+                            return; // Skip enabling input until all processing is complete
                         }
+                        
+                        // Re-enable input
+                        chatInput.disabled = false;
+                        sendButton.disabled = false;
+                        chatInput.focus();
                     } else {
-                        // Re-enable input if no recognizable response
+                        // Re-enable input if there's nothing else to process
                         chatInput.disabled = false;
                         sendButton.disabled = false;
                         chatInput.focus();
                     }
                 })
                 .catch(error => {
-                    console.error('Error processing pending steps:', error);
+                    console.error('Error continuing workflow:', error);
                     hideTypingIndicator();
-                    addMessage('There was an error processing the workflow. Please try again.', false, true);
+                    addMessage('There was an error continuing the workflow. Please try again.', false, true);
                     
                     // Re-enable input
                     chatInput.disabled = false;
@@ -371,7 +468,16 @@
                     if (data.error) {
                         addMessage(data.reply, false, true);
                     } else if (data.awaiting_input) {
-                        addMessage(data.statement);
+                        // Handle both reply and statement if both are provided
+                        if (data.reply) {
+                            addMessage(data.reply);
+                            // Add a small delay before adding the follow-up question
+                            setTimeout(() => {
+                                addMessage(data.statement);
+                            }, 300);
+                        } else {
+                            addMessage(data.statement);
+                        }
                     } else if (data.reply) {
                         addMessage(data.reply);
                         
@@ -393,6 +499,40 @@
                     hideTypingIndicator();
                     addMessage('There was an error starting the chat. Please try again.', false, true);
                 });
+            }
+            
+            // Process the response from send_message
+            function processSendMessageResponse(data) {
+                hideTypingIndicator();
+                
+                if (data.error) {
+                    addMessage(data.reply, false, true);
+                } else if (data.awaiting_input) {
+                    // Handle both reply and statement if both are provided
+                    if (data.reply) {
+                        addMessage(data.reply);
+                        // Add a small delay before adding the follow-up question
+                        setTimeout(() => {
+                            addMessage(data.statement);
+                        }, 300);
+                    } else {
+                        addMessage(data.statement);
+                    }
+                } else {
+                    // Pass structured data if available
+                    addMessage(data.reply, false, false, data.structured_data);
+                    
+                    if (data.has_pending_steps) {
+                        // Set a small delay before continuing to allow the UI to update
+                        setTimeout(processPendingSteps, 500);
+                        return;  // Skip enabling input until all processing is complete
+                    }
+                }
+                
+                // Re-enable input
+                chatInput.disabled = false;
+                sendButton.disabled = false;
+                chatInput.focus();
             }
             
             // Send a message
@@ -428,29 +568,7 @@
                     body: JSON.stringify({ message: message })
                 })
                 .then(response => response.json())
-                .then(data => {
-                    hideTypingIndicator();
-                    
-                    if (data.error) {
-                        addMessage(data.reply, false, true);
-                    } else if (data.awaiting_input) {
-                        addMessage(data.statement);
-                    } else if (data.reply) {
-                        addMessage(data.reply);
-                        
-                        // Check if we need to continue processing more steps
-                        if (data.has_pending_steps) {
-                            // Set a small delay before continuing to allow the UI to update
-                            setTimeout(processPendingSteps, 300);
-                            return; // Skip enabling input until all processing is complete
-                        }
-                    }
-                    
-                    // Re-enable input
-                    chatInput.disabled = false;
-                    sendButton.disabled = false;
-                    chatInput.focus();
-                })
+                .then(processSendMessageResponse)
                 .catch(error => {
                     console.error('Error sending message:', error);
                     hideTypingIndicator();
