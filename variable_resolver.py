@@ -12,6 +12,7 @@ Purpose:
 import re
 import logging
 from utils.resolve_variable import resolve_variable, process_variables
+from utils.database import get_neo4j_driver
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -132,7 +133,6 @@ if __name__ == "__main__":
         "legacy": "@{response}"
     }
     
-    from engine import get_neo4j_driver
     driver = get_neo4j_driver()
     
     if driver:

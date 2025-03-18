@@ -1,8 +1,7 @@
 """
 graph_engine.py
 --------------
-This module defines the GraphWorkflowEngine class, which implements the new
-graph-based workflow engine for managing conversational workflows with Neo4j.
+This module defines the GraphWorkflowEngine class, which implements the graph-based workflow engine for managing conversational workflows with Neo4j.
 
 Purpose:
     Provides a Neo4j-based workflow engine that stores all session state
@@ -19,7 +18,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union
 
-from engine import get_neo4j_driver
+from utils.database import get_neo4j_driver
 from utils.resolve_variable import resolve_variable, process_variables
 from utils.store_memory import store_memory
 from utils.session_manager import get_session_manager
@@ -235,7 +234,6 @@ class GraphWorkflowEngine:
                 "has_pending_steps": len(status['next_steps']) > 0,
                 "structured_data": generation_data if generation_data else {}
             }
-    
     def get_chat_history(self, session_id: str) -> List[Dict[str, str]]:
         """
         Get the chat history for a session.

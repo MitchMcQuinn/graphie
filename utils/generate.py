@@ -61,7 +61,7 @@ def generate(session, input_data):
     logger.info(f"Generate function received input_data: {input_data}")
     
     # Get Neo4j driver
-    from engine import get_neo4j_driver
+    from utils.database import get_neo4j_driver
     driver = get_neo4j_driver()
     if not driver:
         logger.error("Neo4j driver not available")

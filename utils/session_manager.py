@@ -440,13 +440,13 @@ def get_session_manager(driver=None):
     if _session_manager is None and driver is not None:
         _session_manager = SessionManager(driver)
     elif _session_manager is None:
-        # Try to get the driver from the engine module
+        # Try to get the driver from the database utils
         try:
-            from engine import get_neo4j_driver
+            from utils.database import get_neo4j_driver
             driver = get_neo4j_driver()
             if driver:
                 _session_manager = SessionManager(driver)
         except ImportError:
-            logger.error("Could not import get_neo4j_driver from engine")
+            logger.error("Could not import get_neo4j_driver from utils.database")
     
     return _session_manager 

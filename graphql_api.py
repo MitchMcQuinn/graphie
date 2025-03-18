@@ -13,7 +13,7 @@ from ariadne import ObjectType, QueryType, MutationType, ScalarType, make_execut
 from ariadne.asgi import GraphQL
 from graph_engine import get_graph_workflow_engine
 from utils.session_manager import get_session_manager
-from engine import get_neo4j_driver
+from utils.database import get_neo4j_driver
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

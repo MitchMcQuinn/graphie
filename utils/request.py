@@ -2,7 +2,7 @@ import logging
 import json
 from utils.session_manager import get_session_manager
 from utils.resolve_variable import process_variables
-from engine import get_neo4j_driver
+from utils.database import get_neo4j_driver
 
 logger = logging.getLogger(__name__)
 
