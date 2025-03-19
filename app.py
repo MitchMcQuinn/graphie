@@ -5,7 +5,7 @@ import uuid
 from flask import Flask, render_template, request, session, jsonify, redirect, url_for
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
-from graph_engine import get_graph_workflow_engine
+from core.graph_engine import get_graph_workflow_engine
 from graphql_api import add_graphql_route
 
 # Set up logging

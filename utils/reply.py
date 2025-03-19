@@ -1,8 +1,8 @@
 import logging
 import json
-from utils.session_manager import get_session_manager
-from utils.resolve_variable import process_variables, resolve_variable
-from utils.database import get_neo4j_driver
+from core.session_manager import get_session_manager
+from core.resolve_variable import process_variables, resolve_variable
+from core.database import get_neo4j_driver
 
 logger = logging.getLogger(__name__)
 

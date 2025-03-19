@@ -1,8 +1,8 @@
 import logging
 import json
-from utils.session_manager import get_session_manager
-from utils.resolve_variable import process_variables
-from utils.database import get_neo4j_driver
+from core.session_manager import get_session_manager
+from core.resolve_variable import process_variables
+from core.database import get_neo4j_driver
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ def handle_user_response(session, user_response):
     
     # Try to continue the workflow automatically
     try:
-        from graph_engine import get_graph_workflow_engine
+        from core.graph_engine import get_graph_workflow_engine
         engine = get_graph_workflow_engine()
         engine.process_workflow_steps(session_id)
     except Exception as e:
