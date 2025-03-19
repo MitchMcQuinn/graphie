@@ -11,7 +11,7 @@ The `utils` package provides a collection of utility functions that workflow ste
 - **generate.py**: Handles OpenAI API integration for text generation with structured outputs.
 - **request.py**: Implements human-in-the-loop functionality, pausing the workflow until user input is received.
 - **reply.py**: Formats and sends responses to users in the chat interface.
-- **structured_generation.py**: Provides specialized functionality for structured content generation.
+- **generate.py**: Provides specialized functionality for structured content generation.
 
 ## Relationship to the Core Package
 
