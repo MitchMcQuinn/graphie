@@ -23,10 +23,11 @@ import json
 from dotenv import load_dotenv
 from core.store_memory import store_memory
 from core.session_manager import get_session_manager
-from core.resolve_variable import process_variables
+from core.resolve_variable import resolve_variable
 from openai import OpenAI
 import time
 import httpx
+import re
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -47,6 +48,50 @@ client = OpenAI(
     api_key=api_key,
     http_client=http_client
 )
+
+def _process_variables_in_text(driver, session_id, text):
+    """
+    Process variable references in a text string using the new resolution approach.
+    
+    Args:
+        driver: Neo4j driver instance
+        session_id: Current session ID
+        text: Text containing variable references
+        
+    Returns:
+        Processed text with resolved variables
+    """
+    if not isinstance(text, str):
+        return text
+        
+    try:
+        logger.info(f"Processing variables in text: {text}")
+        
+        # Find all variable references in the text
+        pattern = r'@\{[^}]+\}(?:\.[^}\s]+\.[^}\s]+)?'
+        matches = re.finditer(pattern, text)
+        
+        # Process each match
+        for match in matches:
+            var_ref = match.group(0)
+            logger.info(f"Found variable reference: {var_ref}")
+            
+            # Resolve the variable
+            resolved = resolve_variable(driver, session_id, var_ref)
+            logger.info(f"Resolved {var_ref} to: {resolved}")
+            
+            # Replace in the text
+            if isinstance(resolved, (str, int, float, bool)):
+                text = text.replace(var_ref, str(resolved))
+            else:
+                logger.warning(f"Can't embed complex object in string: {var_ref}")
+        
+        logger.info(f"Final text after variable resolution: {text}")
+        return text
+        
+    except Exception as e:
+        logger.error(f"Failed to process variables: {str(e)}", exc_info=True)
+        return text
 
 def _generate_api_response(session, input_data):
     """
@@ -87,32 +132,36 @@ def _generate_api_response(session, input_data):
     # Get the session ID
     session_id = session['id']
     
-    # Handle direct SESSION_ID replacement in user message
-    if 'user' in input_data and isinstance(input_data['user'], str):
-        # Check if it contains a variable reference
-        if '@{' in input_data['user']:
-            input_data['user'] = process_variables(driver, session_id, input_data['user'])
-        # Check direct SESSION_ID replacement
-        elif 'SESSION_ID' in input_data['user']:
-            input_data['user'] = input_data['user'].replace('SESSION_ID', session_id)
-    
-    # Process other variables in input_data
-    input_data = process_variables(driver, session_id, input_data)
+    # Process variables in input_data
+    processed_data = {}
+    for key, value in input_data.items():
+        if isinstance(value, str):
+            processed_data[key] = _process_variables_in_text(driver, session_id, value)
+        elif isinstance(value, dict):
+            # Recursively process nested dictionaries
+            processed_data[key] = _process_variables_in_text(driver, session_id, json.dumps(value))
+            try:
+                processed_data[key] = json.loads(processed_data[key])
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse processed dictionary for key {key}")
+                processed_data[key] = value
+        else:
+            processed_data[key] = value
     
     # Extract parameters with defaults
-    system_prompt = input_data.get('system', 'You are a helpful assistant.')
-    user_message = input_data.get('user', '')
-    temperature = float(input_data.get('temperature', 0.7))
-    model = input_data.get('model', 'gpt-4-turbo')
-    include_history = input_data.get('include_history', True)
-    directly_set_reply = input_data.get('directly_set_reply', False)
-    step_id = input_data.get('step_id', 'generate')
-    response_key = input_data.get('response_key', None)  # New parameter for simplified output
+    system_prompt = processed_data.get('system', 'You are a helpful assistant.')
+    user_message = processed_data.get('user', '')
+    temperature = float(processed_data.get('temperature', 0.7))
+    model = processed_data.get('model', 'gpt-4-turbo')
+    include_history = processed_data.get('include_history', True)
+    directly_set_reply = processed_data.get('directly_set_reply', False)
+    step_id = processed_data.get('step_id', 'generate')
+    response_key = processed_data.get('response_key', None)
     
     logger.info(f"User message: '{user_message}', Model: {model}, Temperature: {temperature}")
     
     # Get schema if provided, or use a simple default schema
-    schema = input_data.get('schema', {
+    schema = processed_data.get('schema', {
         "type": "object",
         "properties": {
             "response": {
@@ -124,7 +173,7 @@ def _generate_api_response(session, input_data):
     })
     
     # Get the schema description if provided, or generate one
-    schema_description = input_data.get('schema_description', 
+    schema_description = processed_data.get('schema_description', 
                                        "Respond in a JSON format with the following structure")
     
     # Extract chat history if we need to include it

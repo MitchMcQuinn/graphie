@@ -58,13 +58,23 @@ def resolve_variable(driver, session_id, ref):
         ref = expanded_ref
     
     # Extract reference parts using regex for better handling
-    match = re.match(r'@\{([^}]+)\}\.([^.]+)\.(.+)', ref)
-    if not match:
-        logger.warning(f"Invalid variable reference format: {ref}")
-        return default_value if default_value is not None else ref
-    
-    # Extract components
-    ref_session_id, step_id, key = match.groups()
+    # First try to match a full variable path
+    full_match = re.match(r'@\{([^}]+)\}\.([^.]+)\.(.+)', ref)
+    if full_match:
+        # This is a full variable path
+        ref_session_id, step_id, key = full_match.groups()
+        logger.info(f"Found full variable path: session={ref_session_id}, step={step_id}, key={key}")
+    else:
+        # Try to match a simple session ID reference
+        simple_match = re.match(r'@\{([^}]+)\}', ref)
+        if simple_match:
+            # This is just a session ID reference
+            ref_session_id = simple_match.group(1)
+            logger.info(f"Found simple session ID reference: {ref_session_id}")
+            return ref_session_id
+        else:
+            logger.warning(f"Invalid variable reference format: {ref}")
+            return default_value if default_value is not None else ref
     
     # Check if the referenced session exists
     try:
@@ -149,29 +159,13 @@ def process_variables(driver, session_id, data):
         if 'SESSION_ID' in data and not data.startswith('@{'):
             data = data.replace('SESSION_ID', session_id)
         
-        # Handle complete replacement vs. substring replacement
-        if data.startswith('@{') and data.endswith('}'):
-            # Complete replacement
-            return resolve_variable(driver, session_id, data)
-        elif data.startswith('@{') and '}.' in data:
-            # This is a reference like @{SESSION_ID}.step_id.key
-            # We need to parse and resolve it as one unit
-            parts = data.split('}.')
-            if len(parts) == 2:
-                prefix = parts[0] + '}'
-                suffix = parts[1]
-                
-                # Try to resolve the combined reference
-                combined_ref = prefix + '.' + suffix
-                logger.debug(f"Processing combined reference: {combined_ref}")
-                return resolve_variable(driver, session_id, combined_ref)
-            
-            # Fall back to the default substring replacement if parsing failed
-            return re.sub(r'@\{[^}]+\}', lambda m: str(resolve_variable(driver, session_id, m.group(0))), data)
-        else:
-            # Substring replacement - find all variable references in the string
-            def replace_var(match):
-                var_ref = match.group(0)
+        # Find all variable references in the string
+        def replace_var(match):
+            var_ref = match.group(0)
+            # Check if this is a full variable path
+            if '.' in var_ref:
+                # This is a reference like @{session_id}.step_id.key
+                # We need to resolve it as one unit
                 resolved = resolve_variable(driver, session_id, var_ref)
                 if isinstance(resolved, (str, int, float, bool)):
                     return str(resolved)
@@ -179,9 +173,14 @@ def process_variables(driver, session_id, data):
                     # Can't embed complex objects in a string
                     logger.warning(f"Can't embed complex object in string: {var_ref}")
                     return var_ref
-            
-            pattern = r'@\{[^}]+\}'
-            return re.sub(pattern, replace_var, data)
+            else:
+                # This is a simple session ID reference
+                resolved = resolve_variable(driver, session_id, var_ref)
+                return str(resolved)
+        
+        # Find all variable references and replace them
+        pattern = r'@\{[^}]+\}(?:\.[^}\s]+\.[^}\s]+)?'
+        return re.sub(pattern, replace_var, data)
     else:
         return data
 

@@ -11,9 +11,8 @@ import json
 import logging
 from ariadne import ObjectType, QueryType, MutationType, ScalarType, make_executable_schema
 from ariadne.asgi import GraphQL
-from core.graph_engine import get_graph_workflow_engine
-from core.session_manager import get_session_manager
 from core.database import get_neo4j_driver
+from core.workflow.graphql import WorkflowGraphQLResolver
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +26,9 @@ workflow_result = ObjectType("WorkflowResult")
 chat_message = ObjectType("ChatMessage")
 session_status = ObjectType("SessionStatus")
 json_scalar = ScalarType("JSON")
+
+# Create resolver instance
+resolver = WorkflowGraphQLResolver(get_neo4j_driver())
 
 # Define JSON scalar
 @json_scalar.serializer
@@ -48,89 +50,38 @@ def parse_json_value(value):
 @query.field("frontendState")
 def resolve_frontend_state(_, info, sessionId):
     """Get frontend state for a session"""
-    engine = get_graph_workflow_engine()
-    return engine.get_frontend_state(sessionId)
+    return resolver.resolve_frontend_state(sessionId)
 
 @query.field("chatHistory")
 def resolve_chat_history(_, info, sessionId):
     """Get chat history for a session"""
-    engine = get_graph_workflow_engine()
-    return engine.get_chat_history(sessionId)
+    return resolver.resolve_chat_history(sessionId)
 
 @query.field("hasSession")
 def resolve_has_session(_, info, sessionId):
     """Check if a session exists"""
-    engine = get_graph_workflow_engine()
-    return engine.has_session(sessionId)
+    return resolver.resolve_has_session(sessionId)
 
 @query.field("sessionStatus")
 def resolve_session_status(_, info, sessionId):
     """Get session status"""
-    engine = get_graph_workflow_engine()
-    status = engine.get_session_status(sessionId)
-    
-    # Transform the status object to match the schema
-    result = {
-        "status": status.get("status", "unknown"),
-        "nextSteps": status.get("next_steps", []),
-        "hasError": "error" in status,
-        "errorMessage": status.get("error") if "error" in status else None,
-        "hasChatHistory": bool(status.get("chat_history", []))
-    }
-    
-    return result
+    return resolver.resolve_session_status(sessionId)
 
 # Mutation resolvers
 @mutation.field("startWorkflow")
 def resolve_start_workflow(_, info, sessionId=None):
     """Start a new workflow"""
-    engine = get_graph_workflow_engine()
-    result = engine.start_workflow(sessionId)
-    
-    # Format the result for the schema
-    frontend_state = engine.get_frontend_state(sessionId if sessionId else result.get("session_id", ""))
-    
-    return {
-        "frontendState": frontend_state,
-        "success": "error" not in result if result else False,
-        "errorMessage": result.get("error") if result and "error" in result else None,
-        "hasMoreSteps": result.get("has_more_steps", False) if result else False,
-        "status": result.get("status", "unknown") if result else "error"
-    }
+    return resolver.resolve_start_workflow(sessionId)
 
 @mutation.field("sendMessage")
 def resolve_send_message(_, info, sessionId, message):
     """Send a message to the workflow"""
-    engine = get_graph_workflow_engine()
-    result = engine.continue_workflow(message, sessionId)
-    
-    # Format the result for the schema
-    frontend_state = engine.get_frontend_state(sessionId)
-    
-    return {
-        "frontendState": frontend_state,
-        "success": "error" not in result,
-        "errorMessage": result.get("error") if "error" in result else None,
-        "hasMoreSteps": result.get("has_more_steps", False),
-        "status": result.get("status", "unknown")
-    }
+    return resolver.resolve_send_message(sessionId, message)
 
 @mutation.field("continueProcessing")
 def resolve_continue_processing(_, info, sessionId):
     """Continue processing workflow steps"""
-    engine = get_graph_workflow_engine()
-    result = engine.process_workflow_steps(sessionId)
-    
-    # Format the result for the schema
-    frontend_state = engine.get_frontend_state(sessionId)
-    
-    return {
-        "frontendState": frontend_state,
-        "success": "error" not in result,
-        "errorMessage": result.get("error") if "error" in result else None,
-        "hasMoreSteps": result.get("has_more_steps", False),
-        "status": result.get("status", "unknown")
-    }
+    return resolver.resolve_continue_processing(sessionId)
 
 # Load the schema
 with open("schema.graphql") as schema_file:
