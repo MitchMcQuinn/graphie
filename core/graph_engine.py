@@ -649,7 +649,7 @@ class GraphWorkflowEngine:
         try:
             # Find all outgoing relationships from processed steps
             with self.driver.session() as db_session:
-                # First, get all potential next steps
+                # First, get all potential next steps with their conditions
                 result = db_session.run("""
                     MATCH (s:STEP)-[r:NEXT]->(next:STEP)
                     WHERE s.id IN $step_ids
@@ -660,26 +660,73 @@ class GraphWorkflowEngine:
                 potential_next_steps = []
                 records = list(result)
                 
+                logger.info(f"Found {len(records)} potential paths from processed steps: {processed_steps}")
+                
                 for record in records:
                     relationship = dict(record['r'])
                     target_id = record['target_id']
+                    source_id = record['source_id']
                     
-                    # Check if the relationship has a condition function
-                    if 'function' in relationship and relationship['function']:
-                        # We need to evaluate the condition
-                        # This is complex and would ideally be refactored, but for now
-                        # we can try to use the existing condition evaluation logic
-                        condition_result = self._evaluate_condition(
-                            session_id,
-                            relationship.get('function'),
-                            relationship.get('input')
-                        )
+                    logger.info(f"\n{'='*50}")
+                    logger.info(f"Evaluating path from {source_id} to {target_id}")
+                    logger.info(f"Relationship properties: {relationship}")
+                    
+                    # Check if the relationship has conditions
+                    conditions = relationship.get('conditions')
+                    if conditions:
+                        logger.info(f"Found conditions for path {source_id} -> {target_id}: {conditions}")
+                        
+                        # Parse the conditions string into a JSON object if it's a string
+                        if isinstance(conditions, str):
+                            try:
+                                conditions = json.loads(conditions)
+                                logger.info(f"Parsed conditions JSON: {conditions}")
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Error parsing conditions JSON: {str(e)}")
+                                logger.info(f"Skipping path {source_id} -> {target_id} due to invalid conditions")
+                                continue  # Skip this path if we can't parse conditions
+                        
+                        # Evaluate conditions
+                        condition_result = True
+                        for expected_value, var_ref in conditions.items():
+                            logger.info(f"\nEvaluating condition: expected {expected_value} for {var_ref}")
+                            
+                            # Resolve the condition variable
+                            resolved = resolve_variable(self.driver, session_id, var_ref)
+                            logger.info(f"Resolved variable {var_ref} to {resolved} (type: {type(resolved)})")
+                            
+                            # Convert expected_value to the same type as resolved for comparison
+                            if isinstance(resolved, bool):
+                                # For boolean values, we want to match exactly what's expected
+                                expected = expected_value.lower() == 'true'
+                                logger.info(f"Comparing boolean values: {resolved} == {expected}")
+                            elif isinstance(resolved, (int, float)):
+                                # For numeric values, convert both to float for comparison
+                                expected = float(expected_value)
+                                logger.info(f"Comparing numeric values: {resolved} == {expected}")
+                            else:
+                                # For other values, compare as strings
+                                expected = str(expected_value)
+                                logger.info(f"Comparing string values: {resolved} == {expected}")
+                            
+                            # Compare resolved value with expected value
+                            # The condition is true only if the resolved value matches the expected value
+                            if str(resolved) != str(expected):
+                                condition_result = False
+                                logger.info(f"Condition failed: got {resolved}, expected {expected}")
+                                break
+                            else:
+                                logger.info(f"Condition passed: {resolved} matches {expected}")
                         
                         if condition_result:
                             potential_next_steps.append(target_id)
+                            logger.info(f"All conditions passed for path {source_id} -> {target_id}")
+                        else:
+                            logger.info(f"Conditions failed for path {source_id} -> {target_id}")
                     else:
-                        # No condition, so this is a next step
+                        # No conditions, so this is a next step
                         potential_next_steps.append(target_id)
+                        logger.info(f"No conditions for path {source_id} -> {target_id}, adding to next steps")
                 
                 # Remove duplicates
                 next_steps = list(set(potential_next_steps))
@@ -690,7 +737,9 @@ class GraphWorkflowEngine:
                     SET s.next_steps = $next_steps
                 """, session_id=session_id, next_steps=next_steps)
                 
-                logger.info(f"Updated next steps for session {session_id}: {next_steps}")
+                logger.info(f"\n{'='*50}")
+                logger.info(f"Final next steps for session {session_id}: {next_steps}")
+                logger.info(f"{'='*50}\n")
                 
         except Exception as e:
             logger.error(f"Error updating next steps: {str(e)}")
