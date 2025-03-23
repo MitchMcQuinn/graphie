@@ -219,20 +219,12 @@ class GraphWorkflowEngine:
                     if 'reply' in last_output:
                         reply_data = last_output
             
-            # Find the latest generation data for structured output
-            generation_data = None
-            for step_id, outputs in memory.items():
-                if outputs and step_id.startswith('generate-'):
-                    last_output = outputs[-1]
-                    generation_data = last_output
-            
             reply = reply_data.get('reply', '') if reply_data else ''
             
             return {
                 "awaiting_input": False,
                 "reply": reply,
-                "has_pending_steps": len(status['next_steps']) > 0,
-                "structured_data": generation_data if generation_data else {}
+                "has_pending_steps": len(status['next_steps']) > 0
             }
     def get_chat_history(self, session_id: str) -> List[Dict[str, str]]:
         """
