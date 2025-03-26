@@ -38,29 +38,19 @@ from utils.reply import reply
 
 ## Workflow Graph Ontology
 ### SESSION node
-
-state:
-  ```json
-  {
-    "state": {
-      "id": "",                    // UUID 
-      "workflow": {                // Branch execution management      
-        "step_id": {              // 'step_id' replaced with step being logged
-          "status": "active|pending|complete",      // 'pending', 'active', or 'complete'
-          "dependencies": ["@{SESSION_ID}.step-id.key"], // Array of the variables that the action depends on
-          "error": "string"        // logged errors
-        }
-      },
-      "data": {
-        "outputs": {},            // Step outputs (JSONs) indexed by step_id
-        "messages": []            // Chat history log
-      }
-    }
-  }
-  ```
+```json
+{
+    "id": "UUID",                    // Unique identifier for the session
+    "memory": {},                    // JSON object storing step outputs indexed by step_id
+    "next_steps": [],                // Array of step IDs to process next
+    "created_at": "datetime",        // Session creation timestamp
+    "status": "active|awaiting_input", // Current session status
+    "errors": [],                    // Array of error objects with step_id, cycle, error, and timestamp
+    "chat_history": []               // Array of chat messages with role and content
+}
+```
     
-#### STEP node
-
+### STEP node
 id: string                         // Unique identifier
 utility: [module].[function]       // Pointer to a function in the utility directory
 input: 
@@ -75,8 +65,55 @@ id: string                         // Unique identifier
 condition: ['@{SESSION_ID}.generate-answer.followup'] // An array of values expected to be boolean
 operator: String // ('AND' or 'OR')
 
+## CURRENT Session Workflow Logic
+1. Initialization:
+- When a workflow starts, it initializes with next_steps = ['root'] in the SESSION node
+- The session status is set to 'active'
 
-## Session Workflow Logic
+2. Main Processing Loop (process_workflow_steps):
+- Gets the current next_steps from the session
+- If there are no next steps, returns with status "completed"
+- If session is 'awaiting_input', returns immediately
+
+3. Step Processing:
+For each step in next_steps:
+- Gets step information from the database
+- If the step uses the 'request' utility:
+- - Processes the step
+- - Sets session status to 'awaiting_input'
+- - Returns immediately to wait for user input
+- Otherwise:
+- - Processes the step normally
+- - Stores the step's result in session memory
+
+4. Path Progression (_update_next_steps):
+After processing steps:
+- Finds all outgoing NEXT relationships from processed steps
+- For each relationship:
+- - If it has conditions:
+- - - Evaluates each condition by resolving variables
+- - - Compares resolved values with expected values
+- - - Only adds target step if all conditions pass
+- - If no conditions:
+- - - Adds target step directly
+- Updates the session's next_steps with the new list
+
+5. Continuation Logic:
+- If there are more steps and no request step was encountered:
+- - Recursively calls process_workflow_steps to continue processing
+- Otherwise:
+- - Returns with status "active" if there are more steps
+- - Returns with status "completed" if no more steps
+
+6. User Input Handling:
+When user input is received:
+- Stores the input in session memory
+- Finds the next step in the workflow
+- Updates next_steps to contain only the next step
+- Sets session status back to 'active'
+- Continues processing
+
+## PLANNED Session Workflow Logic
 ### Initialization
 1. Create a Neo4j driver connection
 2. Generate a unique session ID

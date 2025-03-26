@@ -1,27 +1,17 @@
-
 # Workflow Graph Ontology
 ## SESSION node
-state:
+```json
+{
+    "id": "UUID",                    // Unique identifier for the session
+    "memory": {},                    // JSON object storing step outputs indexed by step_id
+    "next_steps": [],                // Array of step IDs to process next
+    "created_at": "datetime",        // Session creation timestamp
+    "status": "active|awaiting_input", // Current session status
+    "errors": [],                    // Array of error objects with step_id, cycle, error, and timestamp
+    "chat_history": []               // Array of chat messages with role and content
+}
+```
 
-    ```json
-    state: {
-        id: "",                      // UUID generated in step 2
-        workflow: {
-            initialization: "root",  // Starting point of workflow
-            error: null,            // Critical workflow-level errors
-            pending: {              // Steps blocked on dependencies
-                "step_id": ["@{SESSION_ID}.other_step.key", ...],
-            }, 
-            log: {
-              
-            }
-        },
-        data: {
-            outputs: {},           // Step outputs (JSONs) indexed by step_id
-            messages: []           // Chat history log
-        }
-    }
-    ```
 ## STEP node
 id: string                         // Unique identifier
 utility: [module].[function]       // Pointer to a function in the utility directory
