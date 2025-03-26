@@ -1,20 +1,20 @@
 """
 core/workflow/graphql.py
 ----------------
-This module provides GraphQL resolvers that use the new workflow engine.
+This module provides GraphQL resolvers that use the graph-based workflow engine.
 """
 
 import logging
 from typing import Dict, Any, Optional
 from neo4j import Driver
 
-from .engine import WorkflowEngine
+from ..graph_engine import get_graph_workflow_engine
 
 logger = logging.getLogger(__name__)
 
 class WorkflowGraphQLResolver:
     """
-    GraphQL resolver that uses the new workflow engine.
+    GraphQL resolver that uses the graph-based workflow engine.
     """
     
     def __init__(self, driver: Driver):
@@ -25,7 +25,7 @@ class WorkflowGraphQLResolver:
             driver: Neo4j driver instance
         """
         self.driver = driver
-        self.engine = WorkflowEngine(driver)
+        self.engine = get_graph_workflow_engine()
     
     def resolve_frontend_state(self, session_id: str) -> Dict[str, Any]:
         """
@@ -38,49 +38,21 @@ class WorkflowGraphQLResolver:
             Dict[str, Any]: Frontend state
         """
         try:
-            status = self.engine.get_session_status(session_id)
+            frontend_state = self.engine.get_frontend_state(session_id)
             
             # Check for error
-            if "error" in status:
+            if frontend_state.get("error"):
                 return {
                     "awaitingInput": False,
                     "error": True,
-                    "reply": status["error"]
+                    "reply": frontend_state.get("reply", "An error occurred")
                 }
             
-            # Get active and pending steps
-            active_steps = status.get("active_steps", [])
-            pending_steps = status.get("pending_steps", [])
-            messages = status.get("messages", [])
-            
-            # Get the latest message
-            latest_message = messages[-1] if messages else None
-            
-            # Determine if we're awaiting input
-            awaiting_input = not active_steps and not pending_steps
-            
-            # Get the reply from the latest assistant message
-            reply = None
-            for msg in reversed(messages):
-                if msg["role"] == "assistant":
-                    reply = msg["content"]
-                    break
-            
-            # Get the statement from the latest user message
-            statement = None
-            if awaiting_input:
-                for msg in reversed(messages):
-                    if msg["role"] == "assistant" and "statement" in msg:
-                        statement = msg["statement"]
-                        break
-                if not statement:
-                    statement = "What would you like to know?"
-            
             return {
-                "awaitingInput": awaiting_input,
-                "reply": reply,
-                "statement": statement,
-                "hasPendingSteps": bool(pending_steps),
+                "awaitingInput": frontend_state.get("awaiting_input", False),
+                "reply": frontend_state.get("reply", ""),
+                "statement": frontend_state.get("statement", "What would you like to know?"),
+                "hasPendingSteps": frontend_state.get("has_pending_steps", False),
                 "structuredData": None,
                 "error": False
             }
@@ -104,8 +76,7 @@ class WorkflowGraphQLResolver:
             list: Chat history
         """
         try:
-            status = self.engine.get_session_status(session_id)
-            return status.get("messages", [])
+            return self.engine.get_chat_history(session_id)
         except Exception as e:
             logger.error(f"Error getting chat history: {str(e)}")
             return []
@@ -121,8 +92,7 @@ class WorkflowGraphQLResolver:
             bool: True if session exists, False otherwise
         """
         try:
-            status = self.engine.get_session_status(session_id)
-            return "error" not in status
+            return self.engine.has_session(session_id)
         except Exception as e:
             logger.error(f"Error checking session: {str(e)}")
             return False
@@ -141,11 +111,11 @@ class WorkflowGraphQLResolver:
             status = self.engine.get_session_status(session_id)
             
             return {
-                "status": "active" if status.get("active_steps") else "pending" if status.get("pending_steps") else "awaiting_input",
-                "nextSteps": status.get("active_steps", []) + status.get("pending_steps", []),
+                "status": status.get("status", "error"),
+                "nextSteps": status.get("next_steps", []),
                 "hasError": "error" in status,
                 "errorMessage": status.get("error"),
-                "hasChatHistory": bool(status.get("messages", []))
+                "hasChatHistory": bool(status.get("chat_history", []))
             }
             
         except Exception as e:
@@ -169,24 +139,21 @@ class WorkflowGraphQLResolver:
             Dict[str, Any]: Workflow result
         """
         try:
-            # Create new session if not provided
-            if not session_id:
-                session_id = self.engine.create_session()
-                if not session_id:
-                    raise Exception("Failed to create session")
+            # Start the workflow
+            result = self.engine.start_workflow(session_id)
             
-            # Process the session
-            success = self.engine.process_session(session_id)
+            if not result:
+                raise Exception("Failed to start workflow")
             
             # Get frontend state
-            frontend_state = self.resolve_frontend_state(session_id)
+            frontend_state = self.resolve_frontend_state(session_id or result.get("session_id"))
             
             return {
                 "frontendState": frontend_state,
-                "success": success,
-                "errorMessage": None if success else "Failed to process session",
+                "success": True,
+                "errorMessage": None,
                 "hasMoreSteps": frontend_state.get("hasPendingSteps", False),
-                "status": "active" if success else "error"
+                "status": "active"
             }
             
         except Exception as e:
@@ -215,18 +182,21 @@ class WorkflowGraphQLResolver:
             Dict[str, Any]: Workflow result
         """
         try:
-            # Add user input
-            success = self.engine.add_user_input(session_id, message)
+            # Continue the workflow with the message
+            result = self.engine.continue_workflow(message, session_id)
+            
+            if "error" in result:
+                raise Exception(result["error"])
             
             # Get frontend state
             frontend_state = self.resolve_frontend_state(session_id)
             
             return {
                 "frontendState": frontend_state,
-                "success": success,
-                "errorMessage": None if success else "Failed to process message",
+                "success": True,
+                "errorMessage": None,
                 "hasMoreSteps": frontend_state.get("hasPendingSteps", False),
-                "status": "active" if success else "error"
+                "status": "active"
             }
             
         except Exception as e:
@@ -254,18 +224,21 @@ class WorkflowGraphQLResolver:
             Dict[str, Any]: Workflow result
         """
         try:
-            # Process the session
-            success = self.engine.process_session(session_id)
+            # Process the next steps
+            result = self.engine.process_workflow_steps(session_id)
+            
+            if "error" in result:
+                raise Exception(result["error"])
             
             # Get frontend state
             frontend_state = self.resolve_frontend_state(session_id)
             
             return {
                 "frontendState": frontend_state,
-                "success": success,
-                "errorMessage": None if success else "Failed to process session",
+                "success": True,
+                "errorMessage": None,
                 "hasMoreSteps": frontend_state.get("hasPendingSteps", False),
-                "status": "active" if success else "error"
+                "status": "active"
             }
             
         except Exception as e:

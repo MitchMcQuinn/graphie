@@ -1,17 +1,9 @@
 """
 core/workflow/__init__.py
 ----------------
-This module exposes the main components of the workflow engine.
+This module exports the workflow components.
 """
 
-from .engine import WorkflowEngine
-from .state import WorkflowState
-from .executor import StepExecutor
-from .path import PathEvaluator
+from .graphql import WorkflowGraphQLResolver
 
-__all__ = [
-    'WorkflowEngine',
-    'WorkflowState',
-    'StepExecutor',
-    'PathEvaluator'
-] 
+__all__ = ['WorkflowGraphQLResolver'] 

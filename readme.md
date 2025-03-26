@@ -1,169 +1,159 @@
-# Graph-Based Session Management Update
+# Graph-Based Agentic Workflow Management
 
-## Overview
+A powerful and flexible workflow management system that uses a graph database (Neo4j) to store and execute conversational workflows. This system enables the creation of complex, stateful workflows with conditional branching and looping, data persistence, and real-time updates.
 
-We've implemented a significant architectural change to Graphie's session management system. Instead of storing session state in memory, we now persist all session data in Neo4j as SESSION nodes. This provides several benefits:
+## Features
 
-1. **Persistence**: Session data survives server restarts
-2. **Scalability**: Multiple server instances can access the same session data
-3. **Visibility**: Session state can be inspected directly in Neo4j
-4. **Consistency**: Unified storage model through graph structure
-5. **History Preservation**: Cycle tracking enables maintaining history of step executions
+- **Graph-Based Workflow Engine**: Uses Neo4j to store and manage workflow state, enabling complex branching and conditional execution
+- **Session Management**: Maintains isolated workflow sessions with persistent state
+- **Variable Resolution**: Supports dynamic variable resolution between workflow steps
+- **Real-time Updates**: WebSocket-based real-time updates for workflow state changes
+- **GraphQL API**: Modern GraphQL interface for interacting with workflows
+- **Conditional Branching**: Support for complex workflow paths based on conditions
+- **Error Handling**: Comprehensive error tracking and logging
+- **Memory Management**: Persistent storage of workflow outputs and chat history
+- **Workflow Visualization**: Tools for viewing and understanding workflow structure
 
-## Design Principles
+## Architecture
 
-The graph-based workflow system is built around several key principles:
+### Core Components
 
-### 1. Uniform Variable Reference Resolution
+- **GraphWorkflowEngine**: The main engine that manages workflow execution and state
+- **SessionManager**: Handles session creation and management
+- **Database**: Manages Neo4j database connectivity
+- **Memory Store**: Handles storage of workflow outputs
+- **Variable Resolver**: Manages variable resolution between steps
 
-All variable references follow a consistent format and resolution mechanism:
-- Any node can reference outputs from any other node using `@{SESSION_ID}.step_id.key`
-- The resolution process is agnostic to specific workflow patterns
-- Default values with the pipe syntax `@{ref}|default` provide fallbacks
-- Variables are resolved consistently regardless of the graph structure
+### Data Model
 
-### 2. Graph-Defined Flow
-
-The workflow logic is entirely defined by the graph structure:
-- NEXT relationships between nodes determine the traversal path
-- No hardcoded sequences or special handling for specific node types
-- The engine simply follows connections defined in the graph
-- Workflows can be modified by changing connections without code changes
-
-### 3. Consistent Data Formats
-
-All nodes use a standardized approach to data storage and access:
-- Consistent output format across different node types (using `response_key`)
-- Predictable data structure for all generated content
-- Unified variable reference syntax for accessing any node's output
-- Common patterns for handling defaults and errors
-
-### 4. Flexible Node Configuration
-
-Nodes are configured with minimal, consistent configuration:
-- Each node type uses a similar JSON format 
-- No special schemas or handling for specific node types
-- The same rules apply across all nodes
-- Simple parameters for controlling node behavior
-
-## Key Components
-
-### New Files
-
-- **utils/store_memory.py**: Stores utility function outputs in SESSION nodes
-- **utils/resolve_variable.py**: Resolves variable references from SESSION nodes
-- **graph_engine.py**: New workflow engine that manages sessions in Neo4j
-- **test_graph_session.py**: Test script for the new session management
-- **setup_neo4j.cypher**: Neo4j schema setup script
-
-### Updated Files
-
-- **engine.py**: Added get_neo4j_driver function
-- **app.py**: Updated to use the new GraphWorkflowEngine
-- **utils/generate.py**: Updated to work with graph-based sessions
-- **utils/reply.py**: Updated to work with graph-based sessions
-- **utils/request.py**: Updated to work with graph-based sessions
-
-## SESSION Node Structure
-
-Each session is represented by a SESSION node with the following properties:
-
-```
+#### SESSION Node
+Represents a workflow session with the following structure:
+```json
 {
-  id: "unique-session-id",
-  memory: {
-    "step-id": [
-      { /* output from cycle 0 */ },
-      { /* output from cycle 1 */ }
-    ]
-  },
-  next_steps: ["step-id-1", "step-id-2"],
-  created_at: datetime,
-  status: "active|awaiting_input|completed",
-  errors: [
-    {
-      "step_id": "step-id",
-      "error": "Error message",
-      "timestamp": "ISO datetime"
-    }
-  ],
-  chat_history: [
-    {
-      "role": "user|assistant",
-      "content": "Message content"
-    }
-  ]
+    "id": "UUID",
+    "memory": {},
+    "next_steps": [],
+    "created_at": "datetime",
+    "status": "active|awaiting_input",
+    "errors": [],
+    "chat_history": []
 }
 ```
 
-## Variable Reference System
+#### STEP Node
+Represents a workflow step with:
+- Unique identifier
+- Utility function reference
+- Input parameters
+- Output storage
 
-The new variable reference system uses the format:
+#### NEXT Relationship
+Defines workflow transitions with:
+- Conditional logic
+- Branching rules
+- Error handling
+
+## Installation
+
+1. Clone the repository
+2. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Set up environment variables:
+   ```bash
+   cp .env.sample .env.local
+   # Edit .env.local with your configuration
+   ```
+
+## Usage
+
+### Starting the Application
+
+```bash
+python app.py
+```
+
+### GraphQL API
+
+The application exposes a GraphQL API for interacting with workflows:
+
+```graphql
+query {
+  frontendState(sessionId: "your-session-id") {
+    awaitingInput
+    reply
+    statement
+    hasPendingSteps
+    structuredData
+    error
+  }
+}
+```
+
+### Workflow Management
+
+1. Create a new workflow session:
+   ```python
+   from core.graph_engine import get_graph_workflow_engine
+   
+   engine = get_graph_workflow_engine()
+   session_id = engine.create_session()
+   ```
+
+2. Start a workflow:
+   ```python
+   result = engine.start_workflow(session_id)
+   ```
+
+3. Continue workflow with user input:
+   ```python
+   result = engine.continue_workflow(user_input, session_id)
+   ```
+
+## Development
+
+### Project Structure
 
 ```
-@{SESSION_ID}.STEP_ID.key[index]|default
+.
+├── app.py                 # Main application entry point
+├── core/                  # Core workflow engine components
+├── utils/                 # Utility functions for workflow steps
+├── tools/                 # Development and debugging tools
+├── templates/             # Web application templates
+├── static/               # Static web assets
+├── tests/                # Test suite
+└── schema.graphql        # GraphQL schema definition
 ```
 
-Where:
-- **SESSION_ID**: The unique ID of the session
-- **STEP_ID**: The ID of the step that generated the output
-- **key**: The property to access in the output
-- **index** (optional): The cycle number to access (defaults to latest)
-- **default** (optional): Default value if the reference cannot be resolved
+### Adding New Workflow Steps
 
-### Variable Resolution Process
+1. Create a new utility function in the `utils/` directory
+2. Define the step in Neo4j with appropriate relationships
+3. Configure input/output parameters
+4. Add any necessary conditions for branching
 
-1. First, SESSION_ID placeholders are expanded to the actual session ID
-2. The system parses the reference format (session_id, step_id, key)
-3. It retrieves the session memory from the SESSION node
-4. It then finds the specified step's outputs in memory
-5. The key is looked up in the latest output (or specified cycle)
-6. If the reference can't be resolved, the default value is used instead
+## Testing
 
-## Workflow Execution
+Run the test suite:
+```bash
+pytest
+```
 
-1. **Session Initialization**:
-   - Generate a unique ID
-   - Create a SESSION node with next_steps = ['root']
+## Contributing
 
-2. **Workflow Crawling**:
-   - Process each step in the next_steps array
-   - Store outputs in the SESSION node's memory property
-   - Update next_steps based on outgoing relationships
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
-3. **Human-in-the-Loop**:
-   - When a request step is encountered, set status = 'awaiting_input'
-   - When user input is received, set status = 'active' and continue processing
+## License
 
-## Creating Custom Workflows
-
-When creating custom workflows:
-
-1. **Define Nodes**: Create STEP nodes with appropriate IDs and inputs
-2. **Connect Nodes**: Create NEXT relationships between nodes
-3. **Configure Variables**: Use the `@{SESSION_ID}.step-id.key` syntax in node inputs
-4. **Ensure Consistency**: Use `response_key` in generative steps for consistent output format
-5. **Set Defaults**: Provide sensible defaults with the pipe syntax
-
-## Setup Instructions
-
-1. Run the Neo4j schema setup script:
-   ```
-   cat setup_neo4j.cypher | cypher-shell -u neo4j -p password
-   ```
-
-2. Update your .env.local file with Neo4j connection details:
-   ```
-   NEO4J_URL=bolt://localhost:7687
-   NEO4J_USERNAME=neo4j
-   NEO4J_PASSWORD=password
-   ```
-
-3. Start the application:
-   ```
-   python app.py
-   ```
-
-## Backward Compatibility
-
-The implementation maintains backward compatibility with the old session management system. Utility functions can work with both the new graph-based sessions and the old in-memory sessions. 
+This project is licensed under the MIT License - see the LICENSE file for details.
